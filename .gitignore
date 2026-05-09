@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+.python-version
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Audiomat runtime data — NEVER commit user audiobook content or voices
+voices/
+projects/
+cache/
+data/
+*.m4b
+*.epub
+*.mobi
+*.azw3
+
+# Logs
+logs/
+*.log
+
+# HF model cache (if mounted locally)
+.cache/
+hub/
+huggingface/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Claude Code project skill — installed per-developer via `uipro init --ai claude`
+# (see README dev setup). Skill upstream: nextlevelbuilder/ui-ux-pro-max-skill.
+.claude/
+
+# Frontend (Vite + React)
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.eslintcache
+frontend/coverage/
+frontend/*.local
+*.tsbuildinfo
+
+# Misc
+*.tmp
+*.bak

@@ -1,0 +1,27 @@
+# Core TTS
+torch>=2.8.0
+torchaudio>=2.8.0
+omnivoice>=0.1.5
+
+# Web API
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.18
+sse-starlette>=2.1
+pydantic>=2.0
+
+# Book parsing
+ebooklib>=0.18
+beautifulsoup4>=4.12
+lxml>=5.0
+
+# Audio
+soundfile>=0.12
+imageio-ffmpeg>=0.5
+numpy>=2.0
+
+# Voice transcript helper
+faster-whisper>=1.0
+
+# HF model hub
+huggingface-hub>=0.30
