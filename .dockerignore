@@ -1,0 +1,52 @@
+# Keep the docker build context lean — anything not needed at build time
+# should not be copied. Mirrors .gitignore where overlapping.
+
+# Git / IDE
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+
+# Python build artifacts
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+build
+dist
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+venv
+
+# Node — frontend dev artifacts (Dockerfile rebuilds inside the builder stage)
+frontend/node_modules
+frontend/dist
+frontend/.vite
+frontend/.eslintcache
+
+# Claude Code skill (per-dev install)
+.claude
+
+# Runtime data — must NEVER make it into the image
+voices
+projects
+cache
+data
+*.m4b
+*.epub
+*.mobi
+*.azw3
+
+# Logs
+logs
+*.log
+
+# OS / misc
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.bak

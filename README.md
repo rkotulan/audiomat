@@ -61,18 +61,34 @@ assets on one port (default 7860).
 
 Detailed design doc to follow in `docs/` once code lands.
 
-## Install (TBD)
+## Install
 
-Eventually:
+The supported install path is Docker (multi-stage image bundles backend +
+frontend). Local Python is fine for development.
+
+### Docker (recommended)
+
+```bash
+git clone https://github.com/rkotulan/audiomat.git
+cd audiomat
+docker compose up --build
+# open http://localhost:7860
+```
+
+The compose file mounts a named volume at `/data` for voices, projects,
+and the OmniVoice model cache (~3 GB, downloaded on first render).
+
+NVIDIA GPU + recent driver required (CUDA 12.8 wheels in the image).
+
+### Manual Docker
 
 ```bash
 docker run --gpus all \
     -p 7860:7860 \
-    -v ~/audiomat:/data \
-    ghcr.io/rkotulan/audiomat:latest
+    -v audiomat-data:/data \
+    -e AUDIOMAT_LIBRARY_ROOT=/data \
+    ghcr.io/rkotulan/audiomat:latest    # not yet published
 ```
-
-For now: not packaged, not pip-installable. Code is still being scaffolded.
 
 ## Development setup
 

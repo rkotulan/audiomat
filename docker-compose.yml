@@ -1,0 +1,36 @@
+# Local development compose file.
+#
+# Usage:
+#   docker compose up --build
+#   open http://localhost:7860
+#
+# The named volume `audiomat-data` persists voices/projects/cache across
+# container rebuilds — important so the OmniVoice 3 GB model checkpoint
+# isn't re-downloaded each time.
+
+services:
+  audiomat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: audiomat:dev
+    container_name: audiomat
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    volumes:
+      - audiomat-data:/data
+    environment:
+      AUDIOMAT_LIBRARY_ROOT: /data
+      HF_HOME: /data/cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  audiomat-data:
+    name: audiomat-data
