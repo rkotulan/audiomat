@@ -6,10 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { listVoices, deleteVoice, voiceAudioUrl } from '@/lib/api'
 import type { Voice } from '@/lib/types'
+import { useConfirm } from '@/components/ConfirmDialog'
 
 export function Voices() {
   const [voices, setVoices] = useState<Voice[] | null>(null)
   const [error, setError] = useState('')
+  const { confirm, dialog: confirmDialog } = useConfirm()
 
   const refresh = () =>
     listVoices()
@@ -20,18 +22,27 @@ export function Voices() {
     refresh()
   }, [])
 
-  const onDelete = async (slug: string, name: string) => {
-    if (!confirm(`Delete voice "${name}"? This is permanent.`)) return
-    try {
-      await deleteVoice(slug)
-      refresh()
-    } catch (e) {
-      alert(String(e))
-    }
+  const onDelete = (slug: string, name: string) => {
+    confirm({
+      title: `Delete voice "${name}"?`,
+      description:
+        'This permanently removes the voice WAV + transcript + meta. Projects that reference this voice will fail to render until you pick another one.',
+      confirmText: 'Delete voice',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteVoice(slug)
+          refresh()
+        } catch (e) {
+          setError(String(e))
+        }
+      },
+    })
   }
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Voices</h1>

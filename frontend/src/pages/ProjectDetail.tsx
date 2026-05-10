@@ -34,6 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { useConfirm } from '@/components/ConfirmDialog'
 import {
   buildM4b,
   cancelRender,
@@ -71,6 +72,7 @@ export function ProjectDetail() {
   const [chapters, setChapters] = useState<ChaptersResponse | null>(null)
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
   const unsubRef = useRef<(() => void) | null>(null)
+  const { confirm, dialog: confirmDialog } = useConfirm()
 
   const refreshChapters = async () => {
     try {
@@ -180,14 +182,21 @@ export function ProjectDetail() {
     }
   }
 
-  const onDelete = async () => {
-    if (!confirm(`Delete project "${project?.name}"? This is permanent.`)) return
-    try {
-      await deleteProject(slug)
-      nav('/projects')
-    } catch (e) {
-      setErr(String(e))
-    }
+  const onDelete = () => {
+    confirm({
+      title: `Delete project "${project?.name}"?`,
+      description: 'This permanently removes the project directory — chunks, manifests, final M4B, render log. Cannot be undone.',
+      confirmText: 'Delete project',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await deleteProject(slug)
+          nav('/projects')
+        } catch (e) {
+          setErr(String(e))
+        }
+      },
+    })
   }
 
   if (!project) {
@@ -212,6 +221,7 @@ export function ProjectDetail() {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       <div>
         <Button variant="ghost" onClick={() => nav('/projects')} className="-ml-3">
           <ArrowLeft className="h-4 w-4" />
@@ -393,19 +403,24 @@ export function ProjectDetail() {
                 alert(`Failed to update skip list: ${e}`)
               }
             }}
-            onResetChapter={async (stem, renderableIndex) => {
-              if (!confirm(`Reset chapter ${stem}?\n\nThis deletes the cached chunks + final WAV. Status flips to pending; click Render selected to re-synth.`)) {
-                return
-              }
-              try {
-                await resetChapter(slug, stem)
-                await refreshChapters()
-                if (renderableIndex != null) {
-                  setSelectedIndices(new Set([renderableIndex]))
-                }
-              } catch (e) {
-                alert(`Reset failed: ${e}`)
-              }
+            onResetChapter={(stem, renderableIndex) => {
+              confirm({
+                title: `Reset chapter ${stem}?`,
+                description: 'Deletes the cached chunks + final WAV for this chapter. Status flips to pending; click Render selected to re-synth.',
+                confirmText: 'Reset',
+                destructive: true,
+                onConfirm: async () => {
+                  try {
+                    await resetChapter(slug, stem)
+                    await refreshChapters()
+                    if (renderableIndex != null) {
+                      setSelectedIndices(new Set([renderableIndex]))
+                    }
+                  } catch (e) {
+                    setErr(`Reset failed: ${e}`)
+                  }
+                },
+              })
             }}
           />
         </TabsContent>
