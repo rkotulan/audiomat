@@ -1,47 +1,9 @@
-import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
-
-interface ModelStatus {
-  state: 'unloaded' | 'downloading' | 'loading' | 'ready'
-  cache_bytes: number
-  cache_target_bytes: number
-  percent: number
-  message: string | null
-}
-
-const POLL_MS_ACTIVE = 2000
-const POLL_MS_IDLE = 10000
+import { useModelStatus } from '@/lib/useModelStatus'
 
 export function SystemBanner() {
-  const [status, setStatus] = useState<ModelStatus | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    let timer: number | undefined
-
-    const tick = async () => {
-      try {
-        const r = await fetch('/api/system/model-status')
-        if (!r.ok) return
-        const next: ModelStatus = await r.json()
-        if (cancelled) return
-        setStatus(next)
-        const wait = next.state === 'ready' || next.state === 'unloaded'
-          ? POLL_MS_IDLE
-          : POLL_MS_ACTIVE
-        timer = window.setTimeout(tick, wait)
-      } catch {
-        timer = window.setTimeout(tick, POLL_MS_IDLE)
-      }
-    }
-
-    tick()
-    return () => {
-      cancelled = true
-      if (timer != null) window.clearTimeout(timer)
-    }
-  }, [])
+  const status = useModelStatus()
 
   if (!status) return null
   if (status.state === 'ready' || status.state === 'unloaded') return null

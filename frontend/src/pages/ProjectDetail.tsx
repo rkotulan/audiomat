@@ -22,6 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
+import { InlineModelProgress } from '@/components/InlineModelProgress'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -482,6 +483,8 @@ export function ProjectDetail() {
                 )}
               </div>
 
+              <InlineModelProgress visible={busy} />
+
               {renderEvents.length > 0 && (
                 <details className="rounded-md border bg-card">
                   <summary className="cursor-pointer select-none list-none px-3 py-2 text-sm font-medium hover:bg-accent/50">
@@ -854,6 +857,7 @@ function PreviewTab({
               {busy ? 'Generating…' : matrix ? 'Re-generate' : 'Generate matrix'}
             </Button>
           </div>
+          <InlineModelProgress visible={busy} />
           {err && <div className="text-sm text-destructive">{err}</div>}
           {matrix && (
             <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
@@ -1050,6 +1054,7 @@ function FineTuneDialog({
           />
         </div>
 
+        <InlineModelProgress visible={busy} />
         {err && <p className="text-xs text-destructive">{err}</p>}
 
         <DialogFooter>
