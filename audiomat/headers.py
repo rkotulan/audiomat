@@ -34,7 +34,10 @@ TIME_HEADER_RE_CS = re.compile(
     r"Před\s+(?:\S+\s+)+lety"
     r"|O\s+(?:\S+\s+)+(?:dní|dny|den|týdny|týdnů|let|měsíc|měsíce|měsíců)\s+(?:později|nato)"
     r"|Týden\s+poté"
-    r"|(?:Zima|Léto|Jaro|Podzim)\s+dva\s+tisíce\s+\S+?"
+    # Season-year header. Two forms supported:
+    # 1. Literary spelled-out: "Zima dva tisíce devatenáct"
+    # 2. Raw 4-digit year:     "Podzim 1973", "Léto 1968"
+    r"|(?:Zima|Léto|Jaro|Podzim)\s+(?:dva\s+tisíce\s+\S+?|\d{4})"
     r")(?=\s|\[|$)",
     re.UNICODE,
 )

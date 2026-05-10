@@ -399,24 +399,66 @@ class BlocksSkippedRequest(BaseModel):
     indices: list[int]
 
 
+def _renderable_stems(proj: Project) -> set[str]:
+    """Compute the set of valid per-chapter stems for the project given
+    its current blocks_skipped. Used by the orphan-cleanup pass after
+    blocks_skipped changes."""
+    blocks = _book_blocks(proj)
+    skip = set(proj.book.blocks_skipped or ())
+    valid: set[str] = set()
+    one_idx = 0
+    for block_idx, block in enumerate(blocks):
+        if block_idx in skip or not getattr(block, "keep", True):
+            continue
+        one_idx += 1
+        leading = block.text or (block.sentences[0] if block.sentences else "")
+        valid.add(f"{one_idx:03d}_{compute_chapter_stem(leading)}")
+    return valid
+
+
+def _prune_orphan_chunks(proj: Project) -> int:
+    """Remove per-chapter dirs in <project>/chunks/ whose stem doesn't
+    match the current renderable list. Called after blocks_skipped
+    changes — when the user skips block 0, every later renderable index
+    shifts (1→0, 2→1, …), and the dirs they used to live in become
+    orphans. build_m4b's alphabetical glob would otherwise pick them
+    up, so we shred them eagerly.
+
+    Returns the number of dirs removed.
+    """
+    if not proj.chunks_dir.exists():
+        return 0
+    valid = _renderable_stems(proj)
+    removed = 0
+    for child in proj.chunks_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if child.name in valid:
+            continue
+        # Skip non-chapter helpers (none today, but future-proof).
+        if child.name.startswith("_"):
+            continue
+        shutil.rmtree(child, ignore_errors=True)
+        removed += 1
+    return removed
+
+
 @app.patch("/api/projects/{slug}/blocks-skipped")
 def update_blocks_skipped(slug: str, req: BlocksSkippedRequest):
-    """Replace project.book.blocks_skipped. Used by the chapter table's
-    per-row Skip / Unskip toggle and by the auto-skip detector for
-    existing projects.
+    """Replace project.book.blocks_skipped + auto-prune any chunks dirs
+    that no longer match the new renderable list.
 
-    NOTE: changing blocks_skipped after some chapters have been rendered
-    leaves the old per-chapter dirs in <project>/chunks/ as orphans —
-    they're indexed under the old stem (renderable index changes when
-    skip list changes). They don't break anything currently because
-    /chapters reflects the current renderable list, but build_m4b's
-    alphabetical glob WILL pick orphan dirs up. Manually delete obsolete
-    dirs for now; future commit could auto-clean.
-    """
+    Removed dir count is logged into render_log.txt and returned in the
+    response under ``orphans_removed`` (added field beyond ProjectOut)."""
     proj = _load_project_or_404(slug)
     proj.book.blocks_skipped = sorted(set(req.indices))
     proj.save()
-    return ProjectOut.from_project(proj)
+    pruned = _prune_orphan_chunks(proj)
+    if pruned > 0:
+        proj.append_log(f"pruned {pruned} orphan chapter dir(s) after blocks_skipped change")
+    out = ProjectOut.from_project(proj).model_dump()
+    out["orphans_removed"] = pruned
+    return out
 
 
 @app.patch("/api/projects/{slug}/params")
