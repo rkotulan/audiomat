@@ -135,6 +135,9 @@ export const startRender = (slug: string, indices?: number[]) =>
     body: JSON.stringify({ indices: indices ?? null }),
   }).then(ok)
 
+export const cancelRender = (slug: string) =>
+  fetch(`${BASE}/projects/${slug}/cancel-render`, { method: 'POST' }).then(ok)
+
 export const buildM4b = (slug: string) =>
   fetch(`${BASE}/projects/${slug}/build-m4b`, { method: 'POST' }).then(ok)
 

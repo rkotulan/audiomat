@@ -15,6 +15,7 @@ import {
   RotateCw,
   Ban,
   Undo2,
+  Square,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -35,6 +36,7 @@ import {
 } from '@/components/ui/dialog'
 import {
   buildM4b,
+  cancelRender,
   deleteProject,
   getProject,
   listChapters,
@@ -148,6 +150,20 @@ export function ProjectDetail() {
       .map((c) => c.renderable_index as number)
     if (pending.length === 0) return
     startRenderJob(pending)
+  }
+  const [cancelling, setCancelling] = useState(false)
+  const onStopRender = async () => {
+    if (!busy || cancelling) return
+    setCancelling(true)
+    try {
+      await cancelRender(slug)
+    } catch (e) {
+      alert(`Cancel failed: ${e}`)
+    } finally {
+      // The SSE error event will arrive next, flipping busy=false.
+      // We just lock the button until it does.
+      setTimeout(() => setCancelling(false), 4000)
+    }
   }
 
   const onBuildM4b = async () => {
@@ -326,6 +342,17 @@ export function ProjectDetail() {
                   <CheckCheck className="h-4 w-4" />
                   Render selected ({selectedIndices.size})
                 </Button>
+                {busy && (
+                  <Button
+                    variant="destructive"
+                    onClick={onStopRender}
+                    disabled={cancelling}
+                    className="ml-auto"
+                  >
+                    <Square className="h-4 w-4 fill-current" />
+                    {cancelling ? 'Stopping…' : 'Stop'}
+                  </Button>
+                )}
               </div>
 
               {renderEvents.length > 0 && (

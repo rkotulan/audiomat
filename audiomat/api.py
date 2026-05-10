@@ -57,6 +57,9 @@ PATHS = AudiomatPaths.default()
 _TTS: OmniVoiceTTS | None = None
 _RENDER_QUEUES: dict[str, asyncio.Queue] = {}
 _RENDER_THREADS: dict[str, threading.Thread] = {}
+# Per-project cancellation flag — POST /cancel-render sets it; the
+# worker thread checks between yielded events and bails out cleanly.
+_RENDER_CANCEL: dict[str, threading.Event] = {}
 
 
 def _get_tts() -> OmniVoiceTTS:
@@ -950,6 +953,8 @@ async def start_render(
 
     queue: asyncio.Queue = asyncio.Queue()
     _RENDER_QUEUES[slug] = queue
+    cancel_event = threading.Event()
+    _RENDER_CANCEL[slug] = cancel_event
     loop = asyncio.get_running_loop()
 
     tts = _get_tts()
@@ -963,12 +968,20 @@ async def start_render(
             else:
                 events = renderer.render_all()
             for event in events:
+                if cancel_event.is_set():
+                    cancelled = ProgressEvent(
+                        kind="error",
+                        message="render cancelled by user",
+                    )
+                    asyncio.run_coroutine_threadsafe(queue.put(cancelled), loop).result()
+                    break
                 asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
         except Exception as e:
             err = ProgressEvent(kind="error", message=f"{type(e).__name__}: {e}")
             asyncio.run_coroutine_threadsafe(queue.put(err), loop).result()
         finally:
             asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+            _RENDER_CANCEL.pop(slug, None)
 
     t = threading.Thread(target=worker, daemon=True, name=f"render-{slug}")
     t.start()
@@ -980,6 +993,27 @@ async def start_render(
         "indices": indices,
         "scope": "selected" if indices else "all",
     }
+
+
+@app.post("/api/projects/{slug}/cancel-render")
+def cancel_render(slug: str):
+    """Stop an in-progress render gracefully. Sets the per-project cancel
+    flag; the worker thread checks it between yielded ProgressEvents and
+    bails on the next iteration. Already-synthesized chunks stay on disk
+    + in the manifest, so a subsequent /render call resumes from the
+    cached point.
+
+    Cancellation is bounded by the current chunk's synth time
+    (~1.5–2 s on RTX 5070 at step 48) — model.generate is uninterruptible
+    once entered, but the for-loop ends as soon as it yields the next
+    event."""
+    if slug not in _RENDER_THREADS or not _RENDER_THREADS[slug].is_alive():
+        raise HTTPException(404, "no render in progress for this project")
+    flag = _RENDER_CANCEL.get(slug)
+    if flag is None:
+        raise HTTPException(409, "cancel flag missing — render thread may be tearing down")
+    flag.set()
+    return {"status": "cancelling", "slug": slug}
 
 
 @app.get("/api/projects/{slug}/progress")
