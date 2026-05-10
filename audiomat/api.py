@@ -23,12 +23,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from audiomat.audio import (
     M4BMetadata,
@@ -1218,3 +1219,22 @@ if not _STATIC_DIR.exists():
     _STATIC_DIR = Path(__file__).parent.parent / "static"
 if _STATIC_DIR.exists():
     app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="frontend")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def spa_404_fallback(request: Request, exc: StarletteHTTPException):
+    """SPA deep-link fallback. Hard-refreshing a React Router path like
+    ``/projects/Rezavy_les_v1`` hits the StaticFiles mount, which 404s
+    because no such file exists in ``dist/``. We catch the 404 and serve
+    ``index.html`` so React Router can handle the route client-side.
+    ``/api/*`` paths still return JSON 404s normally."""
+    if exc.status_code == 404 and not request.url.path.startswith("/api"):
+        if _STATIC_DIR.exists():
+            index = _STATIC_DIR / "index.html"
+            if index.exists():
+                return FileResponse(index)
+    return JSONResponse(
+        {"detail": exc.detail},
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+    )
