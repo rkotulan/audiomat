@@ -1101,6 +1101,27 @@ def list_chapters(slug: str):
     }
 
 
+@app.delete("/api/projects/{slug}/chapters")
+def reset_all_chapters(slug: str):
+    """Wipe every per-chapter cache under ``<project>/chunks/``. Leaves
+    ``previews/`` and ``final.m4b`` untouched.
+
+    Use case: voice / params / language change that the manifest cache
+    doesn't auto-detect (manifest hashes only chunk text). Without this,
+    the only escape hatches were per-row Re-render or manual ``rm -rf``.
+    """
+    proj = _load_project_or_404(slug)
+    if not proj.chunks_dir.exists():
+        return {"reset_count": 0}
+    n = 0
+    for d in proj.chunks_dir.iterdir():
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            n += 1
+    proj.append_log(f"reset all chapter caches: wiped {n} dirs")
+    return {"reset_count": n}
+
+
 @app.delete("/api/projects/{slug}/chapters/{stem}")
 def reset_chapter(slug: str, stem: str):
     """Wipe a single chapter's cache: removes ``<project>/chunks/<stem>/``

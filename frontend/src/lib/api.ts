@@ -220,6 +220,11 @@ export const resetChapter = (slug: string, stem: string) =>
     method: 'DELETE',
   }).then(ok)
 
+export const resetAllChapters = (slug: string) =>
+  fetch(`${BASE}/projects/${slug}/chapters`, { method: 'DELETE' }).then(
+    ok<{ reset_count: number }>,
+  )
+
 export const startRender = (slug: string, indices?: number[]) =>
   fetch(`${BASE}/projects/${slug}/render`, {
     method: 'POST',

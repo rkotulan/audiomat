@@ -46,6 +46,7 @@ import {
   previewCustom,
   previewMatrix,
   projectM4bUrl,
+  resetAllChapters,
   resetChapter,
   startRender,
   subscribeProgress,
@@ -208,6 +209,26 @@ export function ProjectDetail() {
       // We just lock the button until it does.
       setTimeout(() => setCancelling(false), 4000)
     }
+  }
+
+  const onResetAllChapters = () => {
+    const renderedCount = chapters?.rendered_count ?? 0
+    confirm({
+      title: `Reset all ${renderedCount} rendered chapters?`,
+      description:
+        'Deletes every per-chapter cache under chunks/. previews/ and the final M4B stay. Use after voice / params / language changes that the manifest hash doesn\'t auto-detect. You\'ll need to render again from scratch.',
+      confirmText: 'Reset all',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await resetAllChapters(slug)
+          await refreshChapters()
+          refresh()
+        } catch (e) {
+          setErr(String(e))
+        }
+      },
+    })
   }
 
   const onBuildM4b = async () => {
@@ -491,6 +512,26 @@ export function ProjectDetail() {
                   </Button>
                 )}
               </div>
+
+              {!busy && (chapters?.rendered_count ?? 0) > 0 && (
+                <div className="flex items-center justify-between gap-3 pt-2 border-t border-dashed">
+                  <p className="text-xs text-muted-foreground">
+                    Wipes every cached chapter under <code>chunks/</code>.
+                    Use after voice / params / language changes — manifest
+                    hash keys only on chunk text, so otherwise stale audio
+                    sticks around.
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                    onClick={onResetAllChapters}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Reset all chapters
+                  </Button>
+                </div>
+              )}
 
               <InlineModelProgress visible={busy} />
 
