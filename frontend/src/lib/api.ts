@@ -139,7 +139,9 @@ export async function previewMatrix(
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    buf += decoder.decode(value, { stream: true })
+    // sse-starlette/uvicorn emits CRLF line endings (\r\n\r\n between
+    // events); normalize so the LF-only split below works regardless.
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
     let sep
     while ((sep = buf.indexOf('\n\n')) >= 0) {
       const block = buf.slice(0, sep)
