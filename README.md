@@ -149,7 +149,7 @@ docker run --gpus all \
     -p 7860:7860 \
     -v audiomat-data:/data \
     -e AUDIOMAT_LIBRARY_ROOT=/data \
-    ghcr.io/rkotulan/audiomat:latest    # not yet published
+    kotulan/audiomat:latest
 ```
 
 ## Development setup
