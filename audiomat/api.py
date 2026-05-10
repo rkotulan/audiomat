@@ -161,10 +161,10 @@ def _dataclass_to_dict(obj: Any) -> dict:
 # ----------------------------------------------------------------------------
 
 
-# Measured size of the k2-fsa/OmniVoice snapshot on disk (~2.96 GB across
-# 13 files). Used as the denominator for the "downloading" progress %.
-# Slight under/overshoot is fine — UI clamps to 100.
-MODEL_TARGET_BYTES = 3_000_000_000
+# Measured size of the k2-fsa/OmniVoice snapshot on disk (~3.27 GB across
+# 13 files, blob layout). Used as the denominator for the "downloading"
+# progress %. Slight under/overshoot is fine — UI clamps to 100.
+MODEL_TARGET_BYTES = 3_300_000_000
 
 ModelState = Literal["unloaded", "downloading", "loading", "ready"]
 
@@ -190,13 +190,20 @@ def _hf_model_cache_dir() -> Path:
 
 
 def _dir_size_bytes(path: Path) -> int:
-    """Recursive size of all regular files under ``path``. Symlinks counted
-    by their target's size (HF cache uses blob/snapshot symlinks)."""
+    """Recursive size of regular files under ``path``, skipping symlinks.
+
+    HF cache layout is ``blobs/<hash>`` (real file) plus
+    ``snapshots/<commit>/<filename>`` (symlink → blob). Counting both
+    would double every byte. ``is_file()`` follows symlinks by default,
+    so we explicitly skip them.
+    """
     if not path.exists():
         return 0
     total = 0
     for p in path.rglob("*"):
         try:
+            if p.is_symlink():
+                continue
             if p.is_file():
                 total += p.stat().st_size
         except OSError:
