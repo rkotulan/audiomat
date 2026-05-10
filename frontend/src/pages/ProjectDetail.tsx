@@ -77,10 +77,16 @@ export function ProjectDetail() {
   // Render-time ETA tracking. renderStart is the wall-clock ms at job
   // start; `now` ticks every second while busy so ETA refreshes live.
   // renderScope captures which 1-based renderable indices the current job
-  // covers (null = all renderable). Used to scope ETA to the active
-  // job's chapters, not the whole book.
+  // covers (null = all renderable). synthChars / synthSeconds accumulate
+  // ONLY from chunk_synthed events (pure model.generate work — no setup
+  // overhead, no cache hits) → rate is realistic from chunk #1.
+  // seenChars adds chunk_cached on top so "chars done" includes everything
+  // the worker has already processed, even cache hits.
   const [renderStart, setRenderStart] = useState<number | null>(null)
   const [renderScope, setRenderScope] = useState<Set<number> | null>(null)
+  const [synthChars, setSynthChars] = useState(0)
+  const [synthSeconds, setSynthSeconds] = useState(0)
+  const [seenChars, setSeenChars] = useState(0)
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     if (!busy) return
@@ -118,11 +124,24 @@ export function ProjectDetail() {
     setRenderStart(Date.now())
     setNow(Date.now())
     setRenderScope(indices ? new Set(indices) : null)
+    setSynthChars(0)
+    setSynthSeconds(0)
+    setSeenChars(0)
     try {
       await startRender(slug, indices)
       unsubRef.current = subscribeProgress(slug, (e) => {
         setLatest(e)
         setRenderEvents((prev) => [...prev.slice(-200), e])
+        // Per-chunk accumulators feed the rate/ETA calc. Synthed chunks
+        // count toward both work-done AND throughput; cached chunks are
+        // free, so they only count toward work-done (seenChars).
+        if (e.kind === 'chunk_synthed') {
+          setSynthChars((c) => c + (e.text_chars ?? 0))
+          setSynthSeconds((s) => s + (e.gen_seconds ?? 0))
+          setSeenChars((c) => c + (e.text_chars ?? 0))
+        } else if (e.kind === 'chunk_cached') {
+          setSeenChars((c) => c + (e.text_chars ?? 0))
+        }
         // Live-patch the chapter list as events flow in. This keeps the
         // Chapters table in sync without polling — auto-refresh via SSE.
         if (e.kind === 'chapter_concat_start' && e.chapter_stem) {
@@ -236,39 +255,46 @@ export function ProjectDetail() {
     ? Math.round((project.status.chapters_done / project.status.chapters_total) * 100)
     : 0
 
-  // Live render stats — char-based ETA scoped to the current job.
-  //   rate = scoped_done_chars / elapsed_seconds
-  //   ETA  = (scoped_total_chars - scoped_done_chars) / rate
-  // Updates as the SSE stream patches chapter status (or ticks every 1 s).
+  // Live render stats — chunk-level accumulators scoped to the current job.
+  //   rate = synthChars / synthSeconds  (pure model.generate throughput)
+  //   ETA  = (totalChars - seenChars) / rate
+  // synthSeconds skips setup overhead (model load, EPUB parse, HF cache
+  // checks) and cache-hit chapters, so the rate is realistic from the
+  // first synthesized chunk. Updates per chunk_synthed event AND every
+  // 1 s via the now ticker.
   const renderStats = (() => {
     if (!busy || renderStart == null || !chapters) return null
     const elapsed = (now - renderStart) / 1000
-    if (elapsed < 0.5) return { elapsed, eta: null, rate: 0, scopeCount: 0, doneCount: 0 }
 
-    // Restrict to chapters in the active job's scope. renderScope=null
-    // means "Render all" → every renderable chapter contributes.
+    // Scope to the active job's chapters. renderScope=null = Render all.
     const inScope = chapters.chapters.filter((c) => {
       if (c.renderable_index == null) return false
       if (renderScope === null) return true
       return renderScope.has(c.renderable_index)
     })
     const totalChars = inScope.reduce((sum, c) => sum + c.char_count, 0)
-    const doneInScope = inScope.filter((c) => c.status === 'rendered')
-    const doneChars = doneInScope.reduce((sum, c) => sum + c.char_count, 0)
+    const doneInScope = inScope.filter((c) => c.status === 'rendered').length
 
-    if (doneChars === 0 || doneChars >= totalChars) {
-      return {
-        elapsed, eta: null, rate: 0,
-        scopeCount: inScope.length,
-        doneCount: doneInScope.length,
-      }
-    }
-    const rate = doneChars / elapsed
-    const eta = (totalChars - doneChars) / rate
+    // Need a reasonable amount of synth work before quoting a rate. Below
+    // ~1 s of model.generate or ~150 chars synthed (one chunk-ish), the
+    // ratio is dominated by per-chunk fixed overhead and gives misleading
+    // numbers. Show "measuring…" until the floor is crossed.
+    const haveEnoughData = synthSeconds > 1.5 && synthChars > 150
+    const rate = haveEnoughData ? synthChars / synthSeconds : 0
+    const remainingChars = Math.max(0, totalChars - seenChars)
+    const eta =
+      haveEnoughData && rate > 0 && remainingChars > 0
+        ? remainingChars / rate
+        : null
+
     return {
-      elapsed, eta, rate,
+      elapsed,
+      eta,
+      rate,
       scopeCount: inScope.length,
-      doneCount: doneInScope.length,
+      doneCount: doneInScope,
+      seenChars,
+      totalChars,
     }
   })()
 

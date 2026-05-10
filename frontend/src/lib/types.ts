@@ -70,6 +70,7 @@ export interface ProgressEvent {
   chunk_idx: number
   chunk_total: number
   text: string
+  text_chars: number
   gen_seconds: number
   duration_s: number
   rtf: number

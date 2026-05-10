@@ -52,7 +52,8 @@ class ProgressEvent:
     chapter_stem: str = ""
     chunk_idx: int = -1                 # 0-based within chapter
     chunk_total: int = 0
-    text: str = ""                      # chunk text (truncated)
+    text: str = ""                      # chunk text (truncated for display)
+    text_chars: int = 0                 # full chunk text length (for ETA rate calc)
     gen_seconds: float = 0.0
     duration_s: float = 0.0
     rtf: float = 0.0
@@ -185,6 +186,7 @@ class ProjectRenderer:
                     chunk_idx=j,
                     chunk_total=chunk_total,
                     text=text[:80],
+                    text_chars=len(text),
                 )
                 continue
 
@@ -232,6 +234,7 @@ class ProjectRenderer:
                 chunk_idx=j,
                 chunk_total=chunk_total,
                 text=text[:80],
+                text_chars=len(text),
                 gen_seconds=result.gen_seconds,
                 duration_s=result.duration_s,
                 rtf=result.rtf,
