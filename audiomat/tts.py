@@ -70,29 +70,41 @@ class OmniVoiceTTS:
         self.device = device
         self.dtype = dtype
         self._model = None
+        self._loading = False     # True while load() is in progress
         self._sample_rate = 24000
 
     # -- lifecycle --
+
+    @property
+    def is_loading(self) -> bool:
+        """True while :meth:`load` is fetching weights / instantiating.
+        Distinct from :attr:`is_loaded` so the system status endpoint can
+        tell 'idle, never used' apart from 'actively pulling 3 GB'."""
+        return self._loading
 
     def load(self) -> None:
         """Pull weights from HF cache and instantiate the model. Idempotent."""
         if self._model is not None:
             return
-        import torch
-        from omnivoice import OmniVoice
+        self._loading = True
+        try:
+            import torch
+            from omnivoice import OmniVoice
 
-        dtype_map = {
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "float32": torch.float32,
-        }
-        torch_dtype = dtype_map[self.dtype]
-        self._model = OmniVoice.from_pretrained(
-            self.model_id,
-            device_map=self.device,
-            dtype=torch_dtype,
-        )
-        self._sample_rate = int(getattr(self._model, "sampling_rate", 24000))
+            dtype_map = {
+                "float16": torch.float16,
+                "bfloat16": torch.bfloat16,
+                "float32": torch.float32,
+            }
+            torch_dtype = dtype_map[self.dtype]
+            self._model = OmniVoice.from_pretrained(
+                self.model_id,
+                device_map=self.device,
+                dtype=torch_dtype,
+            )
+            self._sample_rate = int(getattr(self._model, "sampling_rate", 24000))
+        finally:
+            self._loading = False
 
     def unload(self) -> None:
         """Drop the model handle and free GPU memory. Idle API workers can

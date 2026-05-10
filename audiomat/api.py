@@ -211,18 +211,25 @@ def model_status() -> ModelStatusOut:
     happening instead of staring at a hung spinner."""
     cache_bytes = _dir_size_bytes(_hf_model_cache_dir())
     is_loaded = _TTS is not None and _TTS.is_loaded
+    is_loading = _TTS is not None and _TTS.is_loading
 
+    # State machine. "loading" / "downloading" only fire when a load is
+    # actually in progress — otherwise a fresh container with a warm
+    # cache would falsely flash "loading" until the user clicks anything.
     if is_loaded:
         state: ModelState = "ready"
         msg = None
-    elif cache_bytes >= int(MODEL_TARGET_BYTES * 0.95):
+    elif is_loading and cache_bytes >= int(MODEL_TARGET_BYTES * 0.95):
         state = "loading"
         msg = "Načítám TTS model na GPU…"
-    elif cache_bytes > 0:
+    elif is_loading and cache_bytes > 0:
         state = "downloading"
         gb_done = cache_bytes / 1e9
         gb_total = MODEL_TARGET_BYTES / 1e9
         msg = f"Stahuji TTS model… {gb_done:.1f} / {gb_total:.1f} GB"
+    elif is_loading:
+        state = "downloading"
+        msg = "Připojuji se k HuggingFace…"
     else:
         state = "unloaded"
         msg = None
