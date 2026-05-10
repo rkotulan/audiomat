@@ -68,3 +68,6 @@ frontend/*.local
 # Misc
 *.tmp
 *.bak
+
+# Local helper scripts
+start-claude.cmd
