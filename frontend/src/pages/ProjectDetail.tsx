@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { InlineModelProgress } from '@/components/InlineModelProgress'
+import { InlineProgressCard } from '@/components/InlineProgressCard'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -863,16 +864,16 @@ function PreviewTab({
           <div className="flex gap-2">
             <Button onClick={onGenerate} disabled={busy}>
               <Wand2 className="h-4 w-4" />
-              {busy
-                ? cellsTotal > 0
-                  ? `Generating ${cellsDone}/${cellsTotal}…`
-                  : 'Generating…'
-                : matrix
-                ? 'Re-generate'
-                : 'Generate matrix'}
+              {busy ? 'Generating…' : matrix ? 'Re-generate' : 'Generate matrix'}
             </Button>
           </div>
           <InlineModelProgress visible={busy} />
+          {busy && cellsTotal > 0 && (
+            <InlineProgressCard
+              message={`Generating ${cellsDone} / ${cellsTotal} cells…`}
+              percent={(cellsDone / cellsTotal) * 100}
+            />
+          )}
           {err && <div className="text-sm text-destructive">{err}</div>}
           {matrix && (
             <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">

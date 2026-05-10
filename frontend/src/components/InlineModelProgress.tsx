@@ -1,4 +1,4 @@
-import { Progress } from '@/components/ui/progress'
+import { InlineProgressCard } from '@/components/InlineProgressCard'
 import { useModelStatus } from '@/lib/useModelStatus'
 
 /**
@@ -20,18 +20,10 @@ export function InlineModelProgress({ visible = true }: { visible?: boolean }) {
   if (!visible) return null
   if (!status) return null
   if (status.state !== 'downloading' && status.state !== 'loading') return null
-  const pct = Math.round(status.percent)
   return (
-    <div className="rounded-md border border-amber-200/70 bg-amber-50/60 dark:border-amber-900/50 dark:bg-amber-950/20 px-3 py-2 space-y-1.5">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-amber-900 dark:text-amber-200">
-          {status.message ?? 'Připravuji TTS model…'}
-        </span>
-        <span className="font-mono text-amber-800 dark:text-amber-300">
-          {pct}%
-        </span>
-      </div>
-      <Progress value={pct} className="h-1" />
-    </div>
+    <InlineProgressCard
+      message={status.message ?? 'Připravuji TTS model…'}
+      percent={status.percent}
+    />
   )
 }
