@@ -425,6 +425,25 @@ export function ProjectDetail() {
                 )}
               </div>
 
+              <div className="flex flex-wrap gap-1.5">
+                <Badge variant="secondary" className="font-normal">
+                  <span className="text-muted-foreground mr-1">voice</span>
+                  {project.voice_ref}
+                </Badge>
+                <Badge variant="secondary" className="font-normal font-mono">
+                  <span className="text-muted-foreground mr-1 font-sans">num_step</span>
+                  {project.params.num_step}
+                </Badge>
+                <Badge variant="secondary" className="font-normal font-mono">
+                  <span className="text-muted-foreground mr-1 font-sans">guidance</span>
+                  {project.params.guidance_scale}
+                </Badge>
+                <Badge variant="secondary" className="font-normal font-mono">
+                  <span className="text-muted-foreground mr-1 font-sans">speed</span>
+                  {project.params.speed}×
+                </Badge>
+              </div>
+
               <div className="flex flex-wrap gap-2">
                 <Button onClick={onRender} disabled={busy}>
                   <Play className="h-4 w-4" />
