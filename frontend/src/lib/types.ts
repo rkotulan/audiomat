@@ -98,5 +98,7 @@ export interface PreviewVariant {
 export interface PreviewMatrix {
   sample_text: string
   sample_chars: number
+  sample_block_index: number
+  sample_block_total: number
   variants: PreviewVariant[]
 }

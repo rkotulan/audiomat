@@ -459,9 +459,17 @@ function PreviewTab({
           </div>
           {err && <div className="text-sm text-destructive">{err}</div>}
           {matrix && (
-            <div className="rounded-md border bg-muted/40 p-3 text-xs">
-              <p className="font-medium mb-1">Sample text ({matrix.sample_chars} chars):</p>
+            <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
+              <p className="font-medium">
+                Sample text — block {matrix.sample_block_index + 1} of{' '}
+                {matrix.sample_block_total} ({matrix.sample_chars} chars)
+              </p>
               <p className="italic line-clamp-3">{matrix.sample_text}</p>
+              <p className="text-muted-foreground">
+                Picked from ~⅓ in to skip front-matter / DRM watermarks.
+                Edit <code>book.blocks_skipped</code> in config.json to
+                exclude specific block indices.
+              </p>
             </div>
           )}
         </CardContent>

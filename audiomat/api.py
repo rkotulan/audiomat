@@ -443,14 +443,79 @@ PREVIEW_MATRIX = [
 ]
 
 
-def _pick_sample_text(blocks: list, max_chars: int = 600) -> str | None:
-    """Find the first block whose joined sentences are ≥ 300 chars (skipping
-    short headers / front-matter / TOC fragments). Cap output at ``max_chars``
-    so each variant stays under ~30 s audio."""
-    for b in blocks:
+# Patterns that mark a block as DRM / copyright / metadata noise rather
+# than book prose. Matched case-insensitively as substrings. Common Czech
+# Palmknihy / nakladatel watermark phrases land here. Add new patterns
+# only when you've seen them clobber a real preview.
+_METADATA_PATTERNS = (
+    "palmknihy",
+    "kupující",
+    "kupujici",
+    "isbn",
+    "neoprávněn",
+    "autorského práva",
+    "trestního zákoníku",
+    "kniha je určena",
+    "elektronických knih",
+    "kniha jako celek",
+    "all rights reserved",
+)
+
+
+def _is_metadata_block(text: str) -> bool:
+    lower = text.lower()
+    return any(pat in lower for pat in _METADATA_PATTERNS)
+
+
+def _pick_sample_text(
+    blocks: list,
+    blocks_skipped: list[int] | tuple[int, ...] = (),
+    max_chars: int = 600,
+) -> tuple[str, int] | None:
+    """Return (sample_text, source_block_index) — a representative prose
+    excerpt for the preview matrix.
+
+    Strategy:
+
+    1. Filter out blocks the project tagged in ``blocks_skipped`` (typically
+       cover, copyright, TOC).
+    2. Start search at ~33 % into the remaining blocks. This skips most
+       front-matter that's not explicitly tagged (Palmknihy DRM watermark,
+       publisher imprint, dedication, foreword) and lands somewhere in the
+       actual narrative.
+    3. Pick the first block ≥ 300 chars whose text doesn't trip the
+       metadata-pattern blocklist (publisher / DRM phrases).
+    4. Fall back to "any ≥ 300 char block from the same point on" if the
+       blocklist is too aggressive.
+    5. Final fallback: scan from the very start (ignoring all heuristics).
+    """
+    if not blocks:
+        return None
+    skip = set(blocks_skipped or ())
+    available = [(i, b) for i, b in enumerate(blocks) if i not in skip]
+    if not available:
+        return None
+
+    start = max(0, len(available) // 3)
+
+    # Pass 1 — middle-onward, blocklist-clean
+    for orig_idx, b in available[start:]:
+        joined = " ".join(b.sentences).strip()
+        if len(joined) >= 300 and not _is_metadata_block(joined):
+            return joined[:max_chars], orig_idx
+
+    # Pass 2 — middle-onward, allow metadata text (last resort within search range)
+    for orig_idx, b in available[start:]:
         joined = " ".join(b.sentences).strip()
         if len(joined) >= 300:
-            return joined[:max_chars]
+            return joined[:max_chars], orig_idx
+
+    # Pass 3 — anywhere in the book
+    for orig_idx, b in available:
+        joined = " ".join(b.sentences).strip()
+        if len(joined) >= 300:
+            return joined[:max_chars], orig_idx
+
     return None
 
 
@@ -480,9 +545,10 @@ def preview_matrix(slug: str):
         text = proj.book_path.read_text(encoding="utf-8")
         blocks = [Block(text=text, sentences=split_sentences(text))]
 
-    sample_text = _pick_sample_text(blocks)
-    if sample_text is None:
+    picked = _pick_sample_text(blocks, blocks_skipped=proj.book.blocks_skipped)
+    if picked is None:
         raise HTTPException(400, "no block ≥ 300 chars found in book — preview needs prose")
+    sample_text, sample_block_index = picked
 
     previews_dir = proj.dir / "previews"
     previews_dir.mkdir(exist_ok=True)
@@ -534,6 +600,8 @@ def preview_matrix(slug: str):
     return {
         "sample_text": sample_text,
         "sample_chars": len(clean),
+        "sample_block_index": sample_block_index,
+        "sample_block_total": len(blocks),
         "variants": results,
     }
 
