@@ -10,17 +10,24 @@ import {
   Wand2,
   Save,
   Star,
-  ChevronDown,
+  Sliders,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   buildM4b,
   deleteProject,
@@ -289,14 +296,12 @@ export function ProjectDetail() {
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4 pt-4">
+          <OutputParamsCard project={project} slug={slug} onSaved={refresh} />
           <Card>
             <CardHeader>
               <CardTitle className="text-destructive">Danger zone</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground mb-3">
-                Render parameters live on the Preview tab (Custom params section).
-              </p>
               <Button variant="destructive" onClick={onDelete}>
                 <Trash2 className="h-4 w-4" />
                 Delete project
@@ -398,6 +403,8 @@ function PreviewTab({
   const [matrix, setMatrix] = useState<PreviewMatrix | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [tuningIndex, setTuningIndex] = useState<number | null>(null)
+  const [tunedFlags, setTunedFlags] = useState<Set<number>>(new Set())
 
   const onGenerate = async () => {
     setBusy(true)
@@ -424,6 +431,24 @@ function PreviewTab({
     } catch (e) {
       alert(`Failed to apply params: ${e}`)
     }
+  }
+
+  const onTuned = (idx: number, custom: CustomPreviewResult) => {
+    if (!matrix) return
+    const variants = [...matrix.variants]
+    variants[idx] = {
+      ...variants[idx],
+      num_step: custom.num_step,
+      guidance_scale: custom.guidance_scale,
+      speed: custom.speed,
+      audio_url: custom.audio_url,
+      cached: custom.cached,
+      gen_seconds: custom.gen_seconds,
+      duration_s: custom.duration_s,
+    }
+    setMatrix({ ...matrix, variants })
+    setTunedFlags(new Set(tunedFlags).add(idx))
+    setTuningIndex(null)
   }
 
   const isCurrent = (v: PreviewMatrix['variants'][number]) =>
@@ -471,30 +496,19 @@ function PreviewTab({
         </CardContent>
       </Card>
 
-      <details className="rounded-md border bg-card group">
-        <summary className="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between text-sm font-medium hover:bg-accent/50 transition-colors">
-          <span className="flex items-center gap-2">
-            <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
-            Custom params
-          </span>
-          <span className="text-xs text-muted-foreground font-mono">
-            step {project.params.num_step} · gs {project.params.guidance_scale.toFixed(1)} ·{' '}
-            speed {project.params.speed.toFixed(2)}×
-          </span>
-        </summary>
-        <div className="border-t p-4">
-          <CustomParamsSection project={project} slug={slug} onSaved={onApply} />
-        </div>
-      </details>
-
       {matrix && (
         <div className="grid gap-4 md:grid-cols-2">
-          {matrix.variants.map((v) => (
+          {matrix.variants.map((v, idx) => (
             <Card key={v.label} className={isCurrent(v) ? 'border-primary' : ''}>
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center justify-between">
                   <span className="flex items-center gap-2">
                     {v.label}
+                    {tunedFlags.has(idx) && (
+                      <Badge variant="secondary" className="font-normal">
+                        modified
+                      </Badge>
+                    )}
                     {isCurrent(v) && (
                       <Badge variant="default" className="font-normal">
                         <Star className="h-3 w-3" /> current
@@ -518,29 +532,164 @@ function PreviewTab({
                   preload="metadata"
                   className="w-full h-9"
                 />
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{v.cached ? 'cached' : `${v.gen_seconds.toFixed(1)} s`}</span>
-                  <Button size="sm" onClick={() => onPick(v)}>
-                    Use this
-                    <ArrowRight className="h-3 w-3" />
-                  </Button>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {v.cached ? 'cached' : `${v.gen_seconds.toFixed(1)} s`}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setTuningIndex(idx)}
+                    >
+                      <Sliders className="h-3 w-3" />
+                      Fine tune
+                    </Button>
+                    <Button size="sm" onClick={() => onPick(v)}>
+                      Use this
+                      <ArrowRight className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
           ))}
         </div>
       )}
+
+      <FineTuneDialog
+        open={tuningIndex !== null}
+        variant={tuningIndex !== null && matrix ? matrix.variants[tuningIndex] : null}
+        slug={slug}
+        onClose={() => setTuningIndex(null)}
+        onTuned={(custom) => {
+          if (tuningIndex !== null) onTuned(tuningIndex, custom)
+        }}
+      />
     </div>
   )
 }
 
 // ----------------------------------------------------------------------------
-// Custom params — manual tuning panel embedded in the Preview tab
-// (collapsible <details> wrapper). Power-user knobs that complement the
-// 4-cell preset matrix above.
+// Fine-tune dialog — modal with 3 voice-synth sliders bound to one variant.
+// Generate calls /preview-custom; on success the parent matrix swaps in
+// the new audio + params for that variant.
 // ----------------------------------------------------------------------------
 
-function CustomParamsSection({
+function FineTuneDialog({
+  open,
+  variant,
+  slug,
+  onClose,
+  onTuned,
+}: {
+  open: boolean
+  variant:
+    | (PreviewMatrix['variants'][number])
+    | null
+  slug: string
+  onClose: () => void
+  onTuned: (custom: CustomPreviewResult) => void
+}) {
+  const [params, setParams] = useState({
+    num_step: variant?.num_step ?? 48,
+    guidance_scale: variant?.guidance_scale ?? 2.0,
+    speed: variant?.speed ?? 1.0,
+  })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  // Re-init local sliders whenever the dialog opens for a different variant.
+  useEffect(() => {
+    if (variant) {
+      setParams({
+        num_step: variant.num_step,
+        guidance_scale: variant.guidance_scale,
+        speed: variant.speed,
+      })
+      setErr('')
+    }
+  }, [variant])
+
+  const onGenerate = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const result = await previewCustom(slug, params)
+      onTuned(result)
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Fine tune {variant?.label ?? ''}</DialogTitle>
+          <DialogDescription>
+            Adjust voice-synthesis parameters. Generate re-renders this card
+            with the new sample.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5 py-2">
+          <SliderRow
+            label="num_step"
+            hint="Diffusion steps. Higher = smoother, ~1.5× slower per +16."
+            value={params.num_step}
+            min={16}
+            max={64}
+            step={16}
+            format={(v) => String(v)}
+            onChange={(v) => setParams({ ...params, num_step: v })}
+          />
+          <SliderRow
+            label="guidance_scale"
+            hint="Conditioning strength. 2.0 default; 3.0+ may over-emphasize."
+            value={params.guidance_scale}
+            min={1.0}
+            max={4.0}
+            step={0.1}
+            format={(v) => v.toFixed(1)}
+            onChange={(v) => setParams({ ...params, guidance_scale: v })}
+          />
+          <SliderRow
+            label="speed"
+            hint="Speech tempo. 1.0 natural, 0.85 relaxed, 1.15 brisk."
+            value={params.speed}
+            min={0.7}
+            max={1.3}
+            step={0.05}
+            format={(v) => v.toFixed(2) + '×'}
+            onChange={(v) => setParams({ ...params, speed: v })}
+          />
+        </div>
+
+        {err && <p className="text-xs text-destructive">{err}</p>}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={onGenerate} disabled={busy}>
+            <Wand2 className="h-4 w-4" />
+            {busy ? 'Generating…' : 'Generate'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ----------------------------------------------------------------------------
+// OutputParamsCard — chunking + loudness knobs for the actual book render
+// (NOT for preview audio). Lives in the Advanced tab.
+// ----------------------------------------------------------------------------
+
+function OutputParamsCard({
   project,
   slug,
   onSaved,
@@ -550,32 +699,19 @@ function CustomParamsSection({
   onSaved: () => void
 }) {
   const [params, setParams] = useState({
-    num_step: project.params.num_step,
-    guidance_scale: project.params.guidance_scale,
-    speed: project.params.speed,
     min_chars: project.params.min_chars,
     max_chars: project.params.max_chars,
     target_lufs: project.params.target_lufs,
     silence_gap_ms: project.params.silence_gap_ms,
   })
   const [saving, setSaving] = useState(false)
-  const [previewing, setPreviewing] = useState(false)
-  const [previewResult, setPreviewResult] = useState<CustomPreviewResult | null>(null)
   const [msg, setMsg] = useState('')
+
   const dirty =
-    params.num_step !== project.params.num_step ||
-    params.guidance_scale !== project.params.guidance_scale ||
-    params.speed !== project.params.speed ||
     params.min_chars !== project.params.min_chars ||
     params.max_chars !== project.params.max_chars ||
     params.target_lufs !== project.params.target_lufs ||
     params.silence_gap_ms !== project.params.silence_gap_ms
-
-  const previewMatchesCurrent =
-    previewResult !== null &&
-    previewResult.num_step === params.num_step &&
-    Math.abs(previewResult.guidance_scale - params.guidance_scale) < 0.01 &&
-    Math.abs(previewResult.speed - params.speed) < 0.01
 
   const onSave = async () => {
     setSaving(true)
@@ -591,149 +727,69 @@ function CustomParamsSection({
     }
   }
 
-  const onPreview = async () => {
-    setPreviewing(true)
-    setMsg('')
-    try {
-      const result = await previewCustom(slug, {
-        num_step: params.num_step,
-        guidance_scale: params.guidance_scale,
-        speed: params.speed,
-      })
-      setPreviewResult(result)
-      setMsg(result.cached ? 'Cached.' : `Generated in ${result.gen_seconds.toFixed(1)} s.`)
-    } catch (e) {
-      setMsg(`Preview failed: ${e}`)
-    } finally {
-      setPreviewing(false)
-    }
-  }
-
-  const onReset = () => {
+  const onReset = () =>
     setParams({
-      num_step: project.params.num_step,
-      guidance_scale: project.params.guidance_scale,
-      speed: project.params.speed,
       min_chars: project.params.min_chars,
       max_chars: project.params.max_chars,
       target_lufs: project.params.target_lufs,
       silence_gap_ms: project.params.silence_gap_ms,
     })
-    setMsg('')
-  }
 
   return (
-    <div className="space-y-5">
-      <p className="text-xs text-muted-foreground">
-        Direct knobs for OmniVoice. The 4-cell matrix above renders fixed
-        presets — these sliders apply to your <em>actual book render</em>.
-        After saving, click <strong>Re-generate</strong> on the matrix if
-        you want to hear the new params on the sample. Save invalidates
-        cached chunks for any chapter not yet rendered with the new params.
-      </p>
+    <Card>
+      <CardHeader>
+        <CardTitle>Output parameters</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          These knobs affect the chapter-level concat + loudness pass on the
+          rendered book — they don't change preview audio (preview is a single
+          raw chunk). Voice-synth params (num_step / gs / speed) live on the{' '}
+          Preview tab via the per-variant Fine&nbsp;tune dialog.
+        </p>
 
-      <SliderRow
-        label="num_step"
-        hint="Diffusion steps. Higher = smoother, ~1.5× slower per +16."
-        value={params.num_step}
-        min={16}
-        max={64}
-        step={16}
-        format={(v) => String(v)}
-        onChange={(v) => setParams({ ...params, num_step: v })}
-      />
-
-      <SliderRow
-        label="guidance_scale"
-        hint="Stronger conditioning on (text + voice). 2.0 default; 3.0+ may over-emphasize."
-        value={params.guidance_scale}
-        min={1.0}
-        max={4.0}
-        step={0.1}
-        format={(v) => v.toFixed(1)}
-        onChange={(v) => setParams({ ...params, guidance_scale: v })}
-      />
-
-      <SliderRow
-        label="speed"
-        hint="Speech tempo. 1.0 = natural. 0.85 = relaxed, 1.15 = brisk."
-        value={params.speed}
-        min={0.7}
-        max={1.3}
-        step={0.05}
-        format={(v) => v.toFixed(2) + '×'}
-        onChange={(v) => setParams({ ...params, speed: v })}
-      />
-
-      <Separator />
-
-      <div className="grid grid-cols-2 gap-4">
-        <NumberRow
-          label="min_chars"
-          hint="Chunk floor (info)"
-          value={params.min_chars}
-          onChange={(v) => setParams({ ...params, min_chars: v })}
-        />
-        <NumberRow
-          label="max_chars"
-          hint="Chunk cap (90–250)"
-          value={params.max_chars}
-          onChange={(v) => setParams({ ...params, max_chars: v })}
-        />
-        <NumberRow
-          label="target_lufs"
-          hint="-23 classic, -16 audiobook, -14 louder"
-          value={params.target_lufs}
-          onChange={(v) => setParams({ ...params, target_lufs: v })}
-          step={0.5}
-        />
-        <NumberRow
-          label="silence_gap_ms"
-          hint="Inter-chunk pause"
-          value={params.silence_gap_ms}
-          onChange={(v) => setParams({ ...params, silence_gap_ms: v })}
-        />
-      </div>
-
-      <div className="flex items-center justify-between pt-2">
-        <span className="text-xs text-muted-foreground">{msg}</span>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={onReset} disabled={!dirty}>
-            Reset
-          </Button>
-          <Button variant="outline" onClick={onPreview} disabled={previewing}>
-            <Wand2 className="h-4 w-4" />
-            {previewing ? 'Generating…' : 'Preview these'}
-          </Button>
-          <Button onClick={onSave} disabled={!dirty || saving}>
-            <Save className="h-4 w-4" />
-            {saving ? 'Saving…' : 'Save params'}
-          </Button>
-        </div>
-      </div>
-
-      {previewResult && (
-        <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="font-medium">
-              Custom preview ({previewResult.duration_s.toFixed(1)} s,
-              step {previewResult.num_step} · gs{' '}
-              {previewResult.guidance_scale.toFixed(1)} · speed{' '}
-              {previewResult.speed.toFixed(2)}×)
-            </span>
-            <span className="text-muted-foreground font-mono">
-              {previewMatchesCurrent ? 'matches sliders' : 'sliders changed since render'}
-            </span>
-          </div>
-          <audio
-            controls
-            src={previewResult.audio_url}
-            preload="metadata"
-            className="w-full h-9"
+        <div className="grid grid-cols-2 gap-4">
+          <NumberRow
+            label="min_chars"
+            hint="Chunk floor (info only)"
+            value={params.min_chars}
+            onChange={(v) => setParams({ ...params, min_chars: v })}
+          />
+          <NumberRow
+            label="max_chars"
+            hint="Chunk cap (90–250 typical)"
+            value={params.max_chars}
+            onChange={(v) => setParams({ ...params, max_chars: v })}
+          />
+          <NumberRow
+            label="target_lufs"
+            hint="-23 classic, -16 audiobook, -14 louder"
+            value={params.target_lufs}
+            onChange={(v) => setParams({ ...params, target_lufs: v })}
+            step={0.5}
+          />
+          <NumberRow
+            label="silence_gap_ms"
+            hint="Inter-chunk pause"
+            value={params.silence_gap_ms}
+            onChange={(v) => setParams({ ...params, silence_gap_ms: v })}
           />
         </div>
-      )}
-    </div>
+
+        <div className="flex items-center justify-between pt-2">
+          <span className="text-xs text-muted-foreground">{msg}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onReset} disabled={!dirty}>
+              Reset
+            </Button>
+            <Button onClick={onSave} disabled={!dirty || saving}>
+              <Save className="h-4 w-4" />
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   )
 }
 
