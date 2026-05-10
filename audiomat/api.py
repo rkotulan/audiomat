@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import tempfile
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -153,6 +154,87 @@ def _dataclass_to_dict(obj: Any) -> dict:
     """asdict without importing dataclasses here — keeps the boundary clean."""
     from dataclasses import asdict
     return asdict(obj)
+
+
+# ----------------------------------------------------------------------------
+# System / model status
+# ----------------------------------------------------------------------------
+
+
+# Measured size of the k2-fsa/OmniVoice snapshot on disk (~2.96 GB across
+# 13 files). Used as the denominator for the "downloading" progress %.
+# Slight under/overshoot is fine — UI clamps to 100.
+MODEL_TARGET_BYTES = 3_000_000_000
+
+ModelState = Literal["unloaded", "downloading", "loading", "ready"]
+
+
+class ModelStatusOut(BaseModel):
+    state: ModelState
+    cache_bytes: int
+    cache_target_bytes: int
+    percent: float
+    message: str | None = None
+
+
+def _hf_model_cache_dir() -> Path:
+    """Where huggingface_hub puts the OmniVoice snapshot. Honors HF_HOME if
+    set (Docker sets it to /data/cache/huggingface), falls back to the
+    user's default HF cache."""
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        root = Path(hf_home)
+    else:
+        root = Path.home() / ".cache" / "huggingface"
+    return root / "hub" / "models--k2-fsa--OmniVoice"
+
+
+def _dir_size_bytes(path: Path) -> int:
+    """Recursive size of all regular files under ``path``. Symlinks counted
+    by their target's size (HF cache uses blob/snapshot symlinks)."""
+    if not path.exists():
+        return 0
+    total = 0
+    for p in path.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+@app.get("/api/system/model-status", response_model=ModelStatusOut)
+def model_status() -> ModelStatusOut:
+    """Lightweight poll endpoint — frontend banner ticks this every ~2 s
+    while waiting on first-render cold start so the user sees what's
+    happening instead of staring at a hung spinner."""
+    cache_bytes = _dir_size_bytes(_hf_model_cache_dir())
+    is_loaded = _TTS is not None and _TTS.is_loaded
+
+    if is_loaded:
+        state: ModelState = "ready"
+        msg = None
+    elif cache_bytes >= int(MODEL_TARGET_BYTES * 0.95):
+        state = "loading"
+        msg = "Načítám TTS model na GPU…"
+    elif cache_bytes > 0:
+        state = "downloading"
+        gb_done = cache_bytes / 1e9
+        gb_total = MODEL_TARGET_BYTES / 1e9
+        msg = f"Stahuji TTS model… {gb_done:.1f} / {gb_total:.1f} GB"
+    else:
+        state = "unloaded"
+        msg = None
+
+    pct = min(100.0, (cache_bytes / MODEL_TARGET_BYTES) * 100.0) if MODEL_TARGET_BYTES else 0.0
+    return ModelStatusOut(
+        state=state,
+        cache_bytes=cache_bytes,
+        cache_target_bytes=MODEL_TARGET_BYTES,
+        percent=pct,
+        message=msg,
+    )
 
 
 # ----------------------------------------------------------------------------

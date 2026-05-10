@@ -1,5 +1,6 @@
 import { Headphones, Library, BookOpen } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
+import { SystemBanner } from '@/components/SystemBanner'
 
 export function Layout() {
   return (
@@ -21,6 +22,8 @@ export function Layout() {
           </nav>
         </div>
       </header>
+
+      <SystemBanner />
 
       <main className="flex-1">
         <div className="mx-auto max-w-6xl px-6 py-8">
