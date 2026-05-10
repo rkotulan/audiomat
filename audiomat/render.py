@@ -286,7 +286,52 @@ class ProjectRenderer:
             chunk_total=chunk_total,
         )
 
-    # -- top-level loop --
+    # -- top-level loops --
+
+    def _renderable_targets(self) -> list[tuple[int, Block]]:
+        """List of (one_based_index, Block) for blocks that pass the skip
+        list and Block.keep filter. Shared by render_all / render_indices."""
+        rendered_blocks = [
+            b for i, b in enumerate(self.blocks)
+            if i not in self.project.book.blocks_skipped and b.keep
+        ]
+        return list(enumerate(rendered_blocks, start=1))
+
+    def render_indices(
+        self,
+        indices: list[int] | tuple[int, ...] | set[int],
+    ) -> Iterator[ProgressEvent]:
+        """Render only the requested 1-based renderable indices. Targets
+        are sorted ascending so cache writes stay deterministic. Other
+        chapters are left untouched on disk.
+
+        Used by the UI's "Render selected" / "Render pending" buttons —
+        the user picks specific chapters to (re-)render rather than running
+        the whole book."""
+        all_targets = self._renderable_targets()
+        chapter_total = len(all_targets)
+        wanted = set(indices)
+        targets = sorted(
+            [(idx, b) for idx, b in all_targets if idx in wanted],
+            key=lambda t: t[0],
+        )
+
+        yield ProgressEvent(
+            kind="render_start",
+            chapter_total=chapter_total,
+            message=f"rendering {len(targets)} of {chapter_total} chapter(s) (selected)",
+        )
+        self.project.set_status(phase="rendering")
+
+        for one_idx, block in targets:
+            yield from self.render_block(one_idx, block, chapter_total)
+
+        # Don't force "complete" phase if user only rendered a subset.
+        yield ProgressEvent(
+            kind="render_complete",
+            chapter_total=chapter_total,
+            message=f"completed {len(targets)} chapter(s)",
+        )
 
     def render_all(
         self,

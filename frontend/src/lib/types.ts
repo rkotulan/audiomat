@@ -104,6 +104,25 @@ export interface PreviewMatrix {
   variants: PreviewVariant[]
 }
 
+export type ChapterStatus = 'skipped' | 'pending' | 'rendered' | 'rendering' | 'failed'
+
+export interface Chapter {
+  block_index: number
+  renderable_index: number | null   // null when skipped
+  stem: string | null               // null when skipped
+  char_count: number
+  preview: string
+  status: ChapterStatus
+  audio_url: string | null
+  duration_s: number | null
+}
+
+export interface ChaptersResponse {
+  chapters: Chapter[]
+  renderable_total: number
+  rendered_count: number
+}
+
 export interface CustomPreviewResult {
   num_step: number
   guidance_scale: number

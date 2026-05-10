@@ -11,6 +11,8 @@ import {
   Save,
   Star,
   Sliders,
+  CheckCheck,
+  RotateCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -20,6 +22,7 @@ import { Badge } from '@/components/ui/badge'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -32,6 +35,7 @@ import {
   buildM4b,
   deleteProject,
   getProject,
+  listChapters,
   previewCustom,
   previewMatrix,
   projectM4bUrl,
@@ -40,6 +44,8 @@ import {
   updateProjectParams,
 } from '@/lib/api'
 import type {
+  Chapter,
+  ChaptersResponse,
   CustomPreviewResult,
   PreviewMatrix,
   Project,
@@ -56,7 +62,19 @@ export function ProjectDetail() {
   const [busy, setBusy] = useState(false)
   const [renderEvents, setRenderEvents] = useState<ProgressEvent[]>([])
   const [latest, setLatest] = useState<ProgressEvent | null>(null)
+  const [chapters, setChapters] = useState<ChaptersResponse | null>(null)
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
   const unsubRef = useRef<(() => void) | null>(null)
+
+  const refreshChapters = async () => {
+    try {
+      const c = await listChapters(slug)
+      setChapters(c)
+    } catch (e) {
+      // soft-fail; the chapter list is best-effort
+      console.warn('listChapters failed:', e)
+    }
+  }
 
   const refresh = () =>
     getProject(slug)
@@ -65,31 +83,68 @@ export function ProjectDetail() {
 
   useEffect(() => {
     refresh()
+    refreshChapters()
     return () => unsubRef.current?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
 
-  const onRender = async () => {
+  const startRenderJob = async (indices?: number[]) => {
     setErr('')
     setBusy(true)
     setRenderEvents([])
     setLatest(null)
     try {
-      await startRender(slug)
+      await startRender(slug, indices)
       unsubRef.current = subscribeProgress(slug, (e) => {
         setLatest(e)
         setRenderEvents((prev) => [...prev.slice(-200), e])
+        // Live-patch the chapter list as events flow in. This keeps the
+        // Chapters table in sync without polling — auto-refresh via SSE.
+        if (e.kind === 'chapter_concat_start' && e.chapter_stem) {
+          setChapters((prev) => prev && patchChapterStatus(prev, e.chapter_stem, 'rendering'))
+        } else if (e.kind === 'chapter_done' && e.chapter_stem) {
+          setChapters((prev) =>
+            prev &&
+            patchChapterStatus(prev, e.chapter_stem, 'rendered', `${BASE_API}/projects/${slug}/chapter-audio/${encodeURIComponent(e.chapter_stem)}`),
+          )
+        } else if (e.kind === 'chapter_skipped' && e.chapter_stem) {
+          // chunk cache hit + final wav present → already rendered
+          setChapters((prev) =>
+            prev &&
+            patchChapterStatus(prev, e.chapter_stem, 'rendered', `${BASE_API}/projects/${slug}/chapter-audio/${encodeURIComponent(e.chapter_stem)}`),
+          )
+        } else if (e.kind === 'error') {
+          if (e.chapter_stem) {
+            setChapters((prev) => prev && patchChapterStatus(prev, e.chapter_stem, 'failed'))
+          }
+        }
         if (e.kind === 'render_complete' || e.kind === 'error') {
           unsubRef.current?.()
           unsubRef.current = null
           setBusy(false)
           refresh()
+          // Final canonical refresh — picks up duration_s for newly rendered.
+          refreshChapters()
         }
       })
     } catch (e) {
       setErr(String(e))
       setBusy(false)
     }
+  }
+
+  const onRender = () => startRenderJob()
+  const onRenderSelected = () => {
+    if (selectedIndices.size === 0) return
+    startRenderJob(Array.from(selectedIndices).sort((a, b) => a - b))
+  }
+  const onRenderPending = () => {
+    if (!chapters) return
+    const pending = chapters.chapters
+      .filter((c) => c.status === 'pending' && c.renderable_index != null)
+      .map((c) => c.renderable_index as number)
+    if (pending.length === 0) return
+    startRenderJob(pending)
   }
 
   const onBuildM4b = async () => {
@@ -224,32 +279,74 @@ export function ProjectDetail() {
               <div>
                 <div className="flex justify-between text-sm mb-1">
                   <span>
-                    Chapter {latest?.chapter_idx ?? project.status.chapters_done}/
-                    {latest?.chapter_total ?? project.status.chapters_total}
+                    {chapters
+                      ? `${chapters.rendered_count}/${chapters.renderable_total} chapters rendered`
+                      : `Chapter ${latest?.chapter_idx ?? project.status.chapters_done}/${latest?.chapter_total ?? project.status.chapters_total}`}
                   </span>
-                  <span className="text-muted-foreground">{pct}%</span>
+                  <span className="text-muted-foreground">
+                    {chapters && chapters.renderable_total
+                      ? Math.round((chapters.rendered_count / chapters.renderable_total) * 100)
+                      : pct}%
+                  </span>
                 </div>
-                <Progress value={pct} />
+                <Progress
+                  value={
+                    chapters && chapters.renderable_total
+                      ? Math.round((chapters.rendered_count / chapters.renderable_total) * 100)
+                      : pct
+                  }
+                />
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button onClick={onRender} disabled={busy}>
                   <Play className="h-4 w-4" />
-                  {busy ? 'Rendering…' : project.status.chapters_done > 0
-                    ? 'Continue render'
-                    : 'Start render'}
+                  {busy ? 'Rendering…' : 'Render all'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={onRenderPending}
+                  disabled={
+                    busy ||
+                    !chapters ||
+                    chapters.chapters.every((c) => c.status !== 'pending')
+                  }
+                >
+                  <RotateCw className="h-4 w-4" />
+                  Render pending
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={onRenderSelected}
+                  disabled={busy || selectedIndices.size === 0}
+                >
+                  <CheckCheck className="h-4 w-4" />
+                  Render selected ({selectedIndices.size})
                 </Button>
               </div>
 
               {renderEvents.length > 0 && (
-                <div className="border rounded-md max-h-[300px] overflow-y-auto font-mono text-xs">
-                  {renderEvents.slice().reverse().map((e, i) => (
-                    <EventRow key={i} event={e} />
-                  ))}
-                </div>
+                <details className="rounded-md border bg-card">
+                  <summary className="cursor-pointer select-none list-none px-3 py-2 text-sm font-medium hover:bg-accent/50">
+                    Event log ({renderEvents.length})
+                  </summary>
+                  <div className="border-t max-h-[260px] overflow-y-auto font-mono text-xs">
+                    {renderEvents.slice().reverse().map((e, i) => (
+                      <EventRow key={i} event={e} />
+                    ))}
+                  </div>
+                </details>
               )}
             </CardContent>
           </Card>
+
+          <ChaptersListCard
+            slug={slug}
+            chapters={chapters}
+            selectedIndices={selectedIndices}
+            setSelectedIndices={setSelectedIndices}
+            onRefresh={refreshChapters}
+          />
         </TabsContent>
 
         <TabsContent value="output" className="space-y-4 pt-4">
@@ -385,6 +482,28 @@ function phaseVariant(
   return 'outline'
 }
 
+const BASE_API = '/api'
+
+function patchChapterStatus(
+  resp: ChaptersResponse,
+  stem: string,
+  status: Chapter['status'],
+  audioUrl?: string,
+): ChaptersResponse {
+  let newRendered = resp.rendered_count
+  const next = resp.chapters.map((c) => {
+    if (c.stem !== stem) return c
+    const becomingRendered = status === 'rendered' && c.status !== 'rendered'
+    if (becomingRendered) newRendered += 1
+    return {
+      ...c,
+      status,
+      audio_url: audioUrl !== undefined ? audioUrl : c.audio_url,
+    }
+  })
+  return { ...resp, chapters: next, rendered_count: newRendered }
+}
+
 /**
  * Estimate full-book render wall-time for a given variant.
  *
@@ -414,6 +533,17 @@ function formatDuration(seconds: number): string {
   const m = Math.floor((seconds % 3600) / 60)
   if (h === 0) return `~${m} min`
   return `~${h} h ${m.toString().padStart(2, '0')} min`
+}
+
+/** mm:ss / h:mm:ss for per-chapter audio durations (no "~" prefix). */
+function formatChapterTime(seconds: number): string {
+  if (!isFinite(seconds) || seconds <= 0) return '—'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  const mm = m.toString().padStart(2, '0')
+  const ss = s.toString().padStart(2, '0')
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`
 }
 
 // ----------------------------------------------------------------------------
@@ -895,4 +1025,196 @@ function NumberRow({
       <p className="text-xs text-muted-foreground">{hint}</p>
     </div>
   )
+}
+
+// ----------------------------------------------------------------------------
+// Chapters list — checkboxes + status badges + inline per-chapter audio.
+// Auto-refreshed via SSE events from the parent (patchChapterStatus). Manual
+// refresh button as a safety net.
+// ----------------------------------------------------------------------------
+
+function ChaptersListCard({
+  chapters,
+  selectedIndices,
+  setSelectedIndices,
+  onRefresh,
+}: {
+  slug: string
+  chapters: ChaptersResponse | null
+  selectedIndices: Set<number>
+  setSelectedIndices: (s: Set<number>) => void
+  onRefresh: () => void
+}) {
+  if (!chapters) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Chapters</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">Loading chapters…</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const renderable = chapters.chapters.filter((c) => c.renderable_index != null)
+  const renderableIndices = renderable
+    .map((c) => c.renderable_index as number)
+
+  const allSelected =
+    renderable.length > 0 && renderable.every((c) => selectedIndices.has(c.renderable_index!))
+  const someSelected = !allSelected && renderableIndices.some((i) => selectedIndices.has(i))
+
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelectedIndices(new Set())
+    } else {
+      setSelectedIndices(new Set(renderableIndices))
+    }
+  }
+  const toggleOne = (idx: number) => {
+    const next = new Set(selectedIndices)
+    if (next.has(idx)) next.delete(idx)
+    else next.add(idx)
+    setSelectedIndices(next)
+  }
+  const selectPending = () => {
+    const pending = renderable
+      .filter((c) => c.status === 'pending')
+      .map((c) => c.renderable_index as number)
+    setSelectedIndices(new Set(pending))
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center justify-between">
+          <span>Chapters</span>
+          <span className="text-xs text-muted-foreground font-normal">
+            {chapters.rendered_count} rendered ·{' '}
+            {renderable.length - chapters.rendered_count} pending ·{' '}
+            {chapters.chapters.length - renderable.length} skipped
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3 pb-2 border-b">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <Checkbox
+              checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+              onCheckedChange={toggleAll}
+            />
+            <span>{allSelected ? 'Deselect all' : 'Select all'}</span>
+          </label>
+          <Button size="sm" variant="ghost" onClick={selectPending}>
+            Select pending
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelectedIndices(new Set())}>
+            Clear
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto"
+            onClick={onRefresh}
+            title="Refresh chapter list"
+          >
+            <RotateCw className="h-3 w-3" />
+            Refresh
+          </Button>
+        </div>
+
+        <div className="max-h-[600px] overflow-y-auto rounded-md border">
+          <table className="w-full text-sm">
+            <tbody>
+              {chapters.chapters.map((c) => (
+                <ChapterRow
+                  key={c.block_index}
+                  chapter={c}
+                  selected={
+                    c.renderable_index != null && selectedIndices.has(c.renderable_index)
+                  }
+                  onToggle={() =>
+                    c.renderable_index != null && toggleOne(c.renderable_index)
+                  }
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function ChapterRow({
+  chapter,
+  selected,
+  onToggle,
+}: {
+  chapter: Chapter
+  selected: boolean
+  onToggle: () => void
+}) {
+  const isSkipped = chapter.status === 'skipped'
+  return (
+    <tr className={`border-b last:border-b-0 ${isSkipped ? 'opacity-50' : ''}`}>
+      <td className="px-3 py-2 align-top w-10">
+        {!isSkipped && (
+          <Checkbox checked={selected} onCheckedChange={onToggle} />
+        )}
+      </td>
+      <td className="px-3 py-2 align-top w-20 font-mono text-xs">
+        {chapter.renderable_index != null
+          ? String(chapter.renderable_index).padStart(3, '0')
+          : `b${chapter.block_index}`}
+      </td>
+      <td className="px-3 py-2 align-top">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-mono text-muted-foreground truncate">
+              {chapter.stem ?? '— skipped —'}
+            </div>
+            <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
+              {chapter.preview || <em className="italic">empty</em>}
+            </div>
+          </div>
+          <div className="text-right text-xs whitespace-nowrap">
+            <div className="text-muted-foreground">{chapter.char_count} ch</div>
+            {chapter.duration_s != null && (
+              <div className="font-mono">{formatChapterTime(chapter.duration_s)}</div>
+            )}
+          </div>
+        </div>
+        {chapter.audio_url && (
+          <audio
+            controls
+            src={chapter.audio_url}
+            preload="none"
+            className="w-full h-8 mt-2"
+          />
+        )}
+      </td>
+      <td className="px-3 py-2 align-top w-24 text-right">
+        <ChapterStatusBadge status={chapter.status} />
+      </td>
+    </tr>
+  )
+}
+
+function ChapterStatusBadge({ status }: { status: Chapter['status'] }) {
+  switch (status) {
+    case 'rendered':
+      return <Badge variant="default" className="font-normal">rendered</Badge>
+    case 'rendering':
+      return <Badge variant="secondary" className="font-normal">rendering…</Badge>
+    case 'failed':
+      return <Badge variant="destructive" className="font-normal">failed</Badge>
+    case 'skipped':
+      return <Badge variant="outline" className="font-normal">skipped</Badge>
+    case 'pending':
+    default:
+      return <Badge variant="outline" className="font-normal">pending</Badge>
+  }
 }

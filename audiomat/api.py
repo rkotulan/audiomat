@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -43,7 +43,7 @@ from audiomat.project import (
     RenderParams,
 )
 from audiomat.render import ProgressEvent, ProjectRenderer
-from audiomat.slug import slugify
+from audiomat.slug import chapter_stem as compute_chapter_stem, slugify
 from audiomat.tts import OmniVoiceTTS
 from audiomat.voice import Voice
 
@@ -723,10 +723,123 @@ def preview_audio(slug: str, filename: str):
     return FileResponse(target, media_type="audio/wav")
 
 
+def _book_blocks(proj: Project) -> list:
+    """Parse the project's book into a Block list. Shared by /chapters
+    and /render."""
+    if proj.book.filename.endswith(".epub"):
+        _meta, blocks = parse_epub(proj.book_path)
+        return blocks
+    from audiomat.epub import Block, split_sentences
+    text = proj.book_path.read_text(encoding="utf-8")
+    return [Block(text=text, sentences=split_sentences(text))]
+
+
+@app.get("/api/projects/{slug}/chapters")
+def list_chapters(slug: str):
+    """Return every block with computed stem + status for the Render-tab
+    chapter table.
+
+    Status:
+      * ``skipped`` — block is in book.blocks_skipped or has keep=False
+      * ``rendered`` — final per-chapter WAV exists and is non-empty
+      * ``pending`` — renderable but no audio yet
+
+    Recomputed fresh each call (file stat); no in-memory cache. The
+    chapter list endpoint is the source of truth for the UI's per-row
+    badges and inline audio players.
+    """
+    proj = _load_project_or_404(slug)
+    if not proj.book_path.exists():
+        raise HTTPException(400, f"book file missing: {proj.book_path}")
+
+    blocks = _book_blocks(proj)
+    skip = set(proj.book.blocks_skipped or ())
+    chapters = []
+    one_idx = 0
+    rendered_count = 0
+    for block_idx, block in enumerate(blocks):
+        skipped = block_idx in skip or not getattr(block, "keep", True)
+        if not skipped:
+            one_idx += 1
+
+        text_full = " ".join(block.sentences).strip() if block.sentences else (block.text or "")
+        char_count = len(text_full)
+        preview = text_full[:140]
+
+        if skipped:
+            chapters.append({
+                "block_index": block_idx,
+                "renderable_index": None,
+                "stem": None,
+                "char_count": char_count,
+                "preview": preview,
+                "status": "skipped",
+                "audio_url": None,
+                "duration_s": None,
+            })
+            continue
+
+        leading = block.text or (block.sentences[0] if block.sentences else "")
+        stem = f"{one_idx:03d}_{compute_chapter_stem(leading)}"
+        final_wav = proj.chunks_dir / stem / f"{stem}.wav"
+        rendered = final_wav.exists() and final_wav.stat().st_size > 1024
+
+        if rendered:
+            rendered_count += 1
+            audio_url = f"/api/projects/{slug}/chapter-audio/{stem}"
+            duration_s = round(_wav_duration_s(final_wav), 2)
+            status = "rendered"
+        else:
+            audio_url = None
+            duration_s = None
+            status = "pending"
+
+        chapters.append({
+            "block_index": block_idx,
+            "renderable_index": one_idx,
+            "stem": stem,
+            "char_count": char_count,
+            "preview": preview,
+            "status": status,
+            "audio_url": audio_url,
+            "duration_s": duration_s,
+        })
+
+    return {
+        "chapters": chapters,
+        "renderable_total": one_idx,
+        "rendered_count": rendered_count,
+    }
+
+
+@app.get("/api/projects/{slug}/chapter-audio/{stem}")
+def chapter_audio(slug: str, stem: str):
+    """Serve a per-chapter loudnorm-ed WAV for inline UI playback.
+    ``stem`` is the on-disk directory name (e.g. ``001_Zima_2019``);
+    rejects path-traversal attempts."""
+    proj = _load_project_or_404(slug)
+    if "/" in stem or "\\" in stem or ".." in stem:
+        raise HTTPException(400, "invalid stem")
+    target = proj.chunks_dir / stem / f"{stem}.wav"
+    if not target.exists():
+        raise HTTPException(404, "chapter audio not found")
+    return FileResponse(target, media_type="audio/wav")
+
+
+class RenderRequest(BaseModel):
+    """Optional body for POST /render. ``indices`` is a list of 1-based
+    renderable chapter indices; if absent/empty the whole book renders."""
+    indices: list[int] | None = None
+
+
 @app.post("/api/projects/{slug}/render")
-async def start_render(slug: str):
-    """Kick off background render. Returns immediately. Client connects to
-    /progress for SSE event stream."""
+async def start_render(
+    slug: str,
+    req: RenderRequest = Body(default_factory=RenderRequest),
+):
+    """Kick off background render. Returns immediately. Client connects
+    to /progress for SSE event stream. ``req.indices`` selects specific
+    chapters (UI's "Render selected" / "Render pending"); absent = all."""
     if slug in _RENDER_THREADS and _RENDER_THREADS[slug].is_alive():
         raise HTTPException(409, "render already in progress for this project")
 
@@ -738,14 +851,7 @@ async def start_render(slug: str):
     if not proj.book_path.exists():
         raise HTTPException(400, f"book file missing: {proj.book_path}")
 
-    # Parse EPUB
-    if proj.book.filename.endswith(".epub"):
-        _meta, blocks = parse_epub(proj.book_path)
-    else:
-        # Plain TXT: one block per file (very crude — for v0.1).
-        from audiomat.epub import Block, split_sentences
-        text = proj.book_path.read_text(encoding="utf-8")
-        blocks = [Block(text=text, sentences=split_sentences(text))]
+    blocks = _book_blocks(proj)
 
     queue: asyncio.Queue = asyncio.Queue()
     _RENDER_QUEUES[slug] = queue
@@ -753,10 +859,15 @@ async def start_render(slug: str):
 
     tts = _get_tts()
     renderer = ProjectRenderer(proj, voice, tts, blocks)
+    indices = req.indices
 
     def worker():
         try:
-            for event in renderer.render_all():
+            if indices:
+                events = renderer.render_indices(indices)
+            else:
+                events = renderer.render_all()
+            for event in events:
                 asyncio.run_coroutine_threadsafe(queue.put(event), loop).result()
         except Exception as e:
             err = ProgressEvent(kind="error", message=f"{type(e).__name__}: {e}")
@@ -768,7 +879,12 @@ async def start_render(slug: str):
     t.start()
     _RENDER_THREADS[slug] = t
 
-    return {"status": "started", "slug": slug}
+    return {
+        "status": "started",
+        "slug": slug,
+        "indices": indices,
+        "scope": "selected" if indices else "all",
+    }
 
 
 @app.get("/api/projects/{slug}/progress")
