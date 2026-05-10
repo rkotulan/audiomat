@@ -6,7 +6,12 @@ export function SystemBanner() {
   const status = useModelStatus()
 
   if (!status) return null
-  if (status.state === 'ready' || status.state === 'unloaded') return null
+  // Only the long download (~6 min) needs an app-wide banner — user might
+  // navigate to Voices/Projects mid-pull and want to see progress there.
+  // The brief load-from-cache phase (~5 s) is already handled by the
+  // contextual InlineModelProgress under whichever button the user
+  // pressed; rendering both would just duplicate the same info.
+  if (status.state !== 'downloading') return null
 
   const pct = Math.round(status.percent)
 
