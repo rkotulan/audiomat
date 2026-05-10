@@ -76,7 +76,11 @@ export function ProjectDetail() {
 
   // Render-time ETA tracking. renderStart is the wall-clock ms at job
   // start; `now` ticks every second while busy so ETA refreshes live.
+  // renderScope captures which 1-based renderable indices the current job
+  // covers (null = all renderable). Used to scope ETA to the active
+  // job's chapters, not the whole book.
   const [renderStart, setRenderStart] = useState<number | null>(null)
+  const [renderScope, setRenderScope] = useState<Set<number> | null>(null)
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     if (!busy) return
@@ -113,6 +117,7 @@ export function ProjectDetail() {
     setLatest(null)
     setRenderStart(Date.now())
     setNow(Date.now())
+    setRenderScope(indices ? new Set(indices) : null)
     try {
       await startRender(slug, indices)
       unsubRef.current = subscribeProgress(slug, (e) => {
@@ -231,26 +236,40 @@ export function ProjectDetail() {
     ? Math.round((project.status.chapters_done / project.status.chapters_total) * 100)
     : 0
 
-  // Live render stats — char-based ETA. We sum char_count of "rendered"
-  // chapters to figure out how much work is done; rate = chars / elapsed
-  // wall time; ETA = remaining chars / rate. Updates as the SSE stream
-  // patches chapter status (or ticks every 1 s).
+  // Live render stats — char-based ETA scoped to the current job.
+  //   rate = scoped_done_chars / elapsed_seconds
+  //   ETA  = (scoped_total_chars - scoped_done_chars) / rate
+  // Updates as the SSE stream patches chapter status (or ticks every 1 s).
   const renderStats = (() => {
     if (!busy || renderStart == null || !chapters) return null
     const elapsed = (now - renderStart) / 1000
-    if (elapsed < 0.5) return { elapsed, eta: null, rate: 0 }
-    const totalChars = chapters.chapters
-      .filter((c) => c.renderable_index != null)
-      .reduce((sum, c) => sum + c.char_count, 0)
-    const doneChars = chapters.chapters
-      .filter((c) => c.status === 'rendered')
-      .reduce((sum, c) => sum + c.char_count, 0)
+    if (elapsed < 0.5) return { elapsed, eta: null, rate: 0, scopeCount: 0, doneCount: 0 }
+
+    // Restrict to chapters in the active job's scope. renderScope=null
+    // means "Render all" → every renderable chapter contributes.
+    const inScope = chapters.chapters.filter((c) => {
+      if (c.renderable_index == null) return false
+      if (renderScope === null) return true
+      return renderScope.has(c.renderable_index)
+    })
+    const totalChars = inScope.reduce((sum, c) => sum + c.char_count, 0)
+    const doneInScope = inScope.filter((c) => c.status === 'rendered')
+    const doneChars = doneInScope.reduce((sum, c) => sum + c.char_count, 0)
+
     if (doneChars === 0 || doneChars >= totalChars) {
-      return { elapsed, eta: null, rate: 0 }
+      return {
+        elapsed, eta: null, rate: 0,
+        scopeCount: inScope.length,
+        doneCount: doneInScope.length,
+      }
     }
     const rate = doneChars / elapsed
     const eta = (totalChars - doneChars) / rate
-    return { elapsed, eta, rate }
+    return {
+      elapsed, eta, rate,
+      scopeCount: inScope.length,
+      doneCount: doneInScope.length,
+    }
   })()
 
   return (
@@ -362,6 +381,10 @@ export function ProjectDetail() {
                 />
                 {renderStats && (
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground font-mono">
+                    <span>
+                      job: {renderStats.doneCount}/{renderStats.scopeCount}
+                      {renderScope === null ? ' (all)' : ' selected'}
+                    </span>
                     <span>elapsed {formatChapterTime(renderStats.elapsed)}</span>
                     {renderStats.eta != null && (
                       <span>ETA {formatDuration(renderStats.eta)}</span>
