@@ -449,8 +449,14 @@ async def create_project(
     voice_ref: str = Form(...),
     book: UploadFile = File(...),
     overwrite: bool = Form(False),
+    language: str | None = Form(None),
 ):
-    """Create a new project. Parses EPUB metadata to populate book info."""
+    """Create a new project. Parses EPUB metadata to populate book info.
+
+    ``language`` is honored for ``.txt`` uploads (which carry no
+    metadata of their own); for ``.epub`` it's a fallback used only when
+    the file's DC metadata is missing.
+    """
     if not name.strip():
         raise HTTPException(400, "name is required")
     voice = Voice.find_by_name(PATHS.voices_root, voice_ref)
@@ -473,11 +479,18 @@ async def create_project(
                 "blocks_skipped": _auto_skip_indices(blocks),
                 "title": meta.title,
                 "author": meta.author,
-                "language": meta.language,
+                "language": meta.language or language or "cs",
             }
         except Exception as e:
             shutil.rmtree(tmpdir, ignore_errors=True)
             raise HTTPException(400, f"EPUB parse failed: {e}")
+    elif suffix == ".txt":
+        # Plain text has no metadata channel — language must be supplied
+        # by the user (defaults to cs to keep the Czech-first audiobook
+        # use case zero-config).
+        book_meta = {
+            "language": (language or "cs").strip() or "cs",
+        }
 
     try:
         proj = Project.create(

@@ -81,12 +81,14 @@ export async function createProject(args: {
   voice_ref: string
   book: File
   overwrite?: boolean
+  language?: string
 }): Promise<Project> {
   const fd = new FormData()
   fd.append('name', args.name)
   fd.append('voice_ref', args.voice_ref)
   fd.append('book', args.book)
   fd.append('overwrite', args.overwrite ? 'true' : 'false')
+  if (args.language) fd.append('language', args.language)
   return fetch(`${BASE}/projects`, { method: 'POST', body: fd }).then(ok<Project>)
 }
 
