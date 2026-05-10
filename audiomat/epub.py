@@ -100,10 +100,21 @@ def _extract_text(html_bytes: bytes) -> str:
     Without this, "Šedá dívka Rezavý les je prastarý…" came out glued —
     the section header and first paragraph were textually adjacent in
     extracted plain text.
-    """
-    from bs4 import BeautifulSoup, NavigableString
 
-    soup = BeautifulSoup(html_bytes, "lxml")
+    Parsing choice: ``lxml`` (HTML mode) is intentionally used over
+    ``lxml-xml`` even though EPUB spine items are technically XHTML.
+    HTML mode is more forgiving on real-world EPUBs that contain minor
+    markup quirks. The warning that bs4 emits in this case is silenced
+    locally so it doesn't flood uvicorn logs.
+    """
+    import warnings
+
+    from bs4 import BeautifulSoup, NavigableString
+    from bs4 import XMLParsedAsHTMLWarning
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(html_bytes, "lxml")
     for tag in soup(("script", "style", "noscript")):
         tag.decompose()
     # Append a marker to every heading. headers.strip_markers() will
