@@ -385,6 +385,37 @@ function phaseVariant(
   return 'outline'
 }
 
+/**
+ * Estimate full-book render wall-time for a given variant.
+ *
+ * Linear scaling by chars: if the sample's `sample_chars` rendered in
+ * `gen_seconds`, the whole book of `total_book_chars` should take
+ * `(total / sample) * gen_seconds`. Includes a small per-chapter
+ * overhead bump (~10 %) for ffmpeg loudnorm + concat passes.
+ *
+ * Cached variants have gen_seconds=0; we return "—" for those (no
+ * fresh measurement). User can re-tune to force a re-render.
+ */
+function estimateBookRender(
+  matrix: PreviewMatrix,
+  variant: PreviewMatrix['variants'][number],
+): string {
+  if (variant.cached || variant.gen_seconds <= 0) {
+    return '— (re-tune to estimate)'
+  }
+  const ratio = matrix.total_book_chars / Math.max(matrix.sample_chars, 1)
+  const seconds = ratio * variant.gen_seconds * 1.1   // +10% concat overhead
+  return formatDuration(seconds)
+}
+
+function formatDuration(seconds: number): string {
+  if (!isFinite(seconds) || seconds <= 0) return '—'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (h === 0) return `~${m} min`
+  return `~${h} h ${m.toString().padStart(2, '0')} min`
+}
+
 // ----------------------------------------------------------------------------
 // Preview tab — 4-cell parameter matrix
 // ----------------------------------------------------------------------------
@@ -532,9 +563,15 @@ function PreviewTab({
                   preload="metadata"
                   className="w-full h-9"
                 />
+                <div className="flex items-center justify-between rounded-md bg-muted/40 px-2 py-1.5 text-xs">
+                  <span className="text-muted-foreground">Est. full book render:</span>
+                  <span className="font-mono">
+                    {estimateBookRender(matrix, v)}
+                  </span>
+                </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-muted-foreground">
-                    {v.cached ? 'cached' : `${v.gen_seconds.toFixed(1)} s`}
+                    {v.cached ? 'cached' : `${v.gen_seconds.toFixed(1)} s sample`}
                   </span>
                   <div className="flex gap-2">
                     <Button

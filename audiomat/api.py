@@ -529,7 +529,7 @@ def preview_matrix(slug: str):
     import hashlib
     import time
     import soundfile as sf
-    from audiomat.headers import strip_markers
+    from audiomat.headers import prepare_for_tts
 
     proj = _load_project_or_404(slug)
     voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
@@ -552,10 +552,14 @@ def preview_matrix(slug: str):
 
     previews_dir = proj.dir / "previews"
     previews_dir.mkdir(exist_ok=True)
-    clean = strip_markers(sample_text)
+    language = proj.book.language or "cs"
+    # The text the model actually sees: markers stripped, numbers spelled
+    # out. Returned to UI as sample_text so what's displayed matches what
+    # the model heard.
+    clean = prepare_for_tts(sample_text, lang=language)
     ref_text = voice.transcript()
     ref_audio = str(voice.wav_path)
-    language = proj.book.language or "cs"
+    total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
 
     tts = _get_tts()
     tts.load()
@@ -598,12 +602,25 @@ def preview_matrix(slug: str):
         })
 
     return {
-        "sample_text": sample_text,
+        "sample_text": clean,
         "sample_chars": len(clean),
         "sample_block_index": sample_block_index,
         "sample_block_total": len(blocks),
+        "total_book_chars": total_book_chars,
         "variants": results,
     }
+
+
+def _total_book_chars(blocks: list, blocks_skipped: list[int] | tuple[int, ...]) -> int:
+    """Sum of joined-sentence chars across renderable blocks. Used to
+    estimate full-book render wall-time given a per-variant gen rate."""
+    skip = set(blocks_skipped or ())
+    total = 0
+    for i, b in enumerate(blocks):
+        if i in skip or not getattr(b, "keep", True):
+            continue
+        total += len(" ".join(b.sentences).strip())
+    return total
 
 
 def _wav_duration_s(path: Path) -> float:
@@ -626,7 +643,7 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
     import hashlib
     import time
     import soundfile as sf
-    from audiomat.headers import strip_markers
+    from audiomat.headers import prepare_for_tts
 
     proj = _load_project_or_404(slug)
     voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
@@ -649,7 +666,9 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
 
     previews_dir = proj.dir / "previews"
     previews_dir.mkdir(exist_ok=True)
-    clean = strip_markers(sample_text)
+    language = proj.book.language or "cs"
+    clean = prepare_for_tts(sample_text, lang=language)
+    total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
 
     key_src = f"{clean}|{req.num_step}|{req.guidance_scale}|{req.speed}|{voice.name_slug}"
     key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
@@ -659,10 +678,11 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
         "num_step": req.num_step,
         "guidance_scale": req.guidance_scale,
         "speed": req.speed,
-        "sample_text": sample_text,
+        "sample_text": clean,
         "sample_chars": len(clean),
         "sample_block_index": sample_block_index,
         "sample_block_total": len(blocks),
+        "total_book_chars": total_book_chars,
         "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
     }
 
@@ -677,7 +697,7 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
     t0 = time.time()
     audios = tts._model.generate(
         text=clean,
-        language=proj.book.language or "cs",
+        language=language,
         ref_text=voice.transcript(),
         ref_audio=str(voice.wav_path),
         num_step=req.num_step,

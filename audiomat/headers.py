@@ -118,6 +118,21 @@ def strip_markers(text: str) -> str:
     return out.strip()
 
 
+def prepare_for_tts(text: str, lang: str = "cs") -> str:
+    """Full pre-TTS prep: strip fish-speech markers + expand numbers to
+    words. Use this everywhere a chunk goes to the model — it's the single
+    canonical text-cleaning step in the pipeline.
+
+    Number expansion is critical for natural pronunciation: TTS models
+    typically read raw digits as digit-by-digit ("nineteen-fifty-nine" →
+    "one nine five nine") which sounds robotic. ``audiomat.num2text``
+    converts ``"1959"`` → ``"tisíc devět set padesát devět"`` (CZ)
+    via ``num2words`` + Czech normalizations.
+    """
+    from audiomat.num2text import expand_numbers
+    return expand_numbers(strip_markers(text), lang=lang)
+
+
 if __name__ == "__main__":
     # Smoke test — `python -m audiomat.headers`
     samples = [

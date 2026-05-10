@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from audiomat.headers import strip_markers
+from audiomat.headers import prepare_for_tts
 from audiomat.project import RenderParams
 from audiomat.voice import Voice
 
@@ -135,7 +135,7 @@ class OmniVoiceTTS:
             raise ValueError(f"voice has missing files: {voice.dir}")
 
         self.load()
-        clean = strip_markers(text)
+        clean = prepare_for_tts(text, lang=language)
         ref_text = voice.transcript()
 
         t0 = time.time()

@@ -23,5 +23,8 @@ numpy>=2.0
 # Voice transcript helper
 faster-whisper>=1.0
 
+# Number-to-text expansion (Czech: "1959" -> "tisíc devět set padesát devět")
+num2words>=0.5
+
 # HF model hub
 huggingface-hub>=0.30

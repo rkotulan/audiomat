@@ -100,6 +100,7 @@ export interface PreviewMatrix {
   sample_chars: number
   sample_block_index: number
   sample_block_total: number
+  total_book_chars: number
   variants: PreviewVariant[]
 }
 
@@ -111,6 +112,7 @@ export interface CustomPreviewResult {
   sample_chars: number
   sample_block_index: number
   sample_block_total: number
+  total_book_chars: number
   audio_url: string
   cached: boolean
   gen_seconds: number
