@@ -13,7 +13,10 @@ import { useModelStatus } from '@/lib/useModelStatus'
  * downloading but the user hasn't actually clicked anything yet.
  */
 export function InlineModelProgress({ visible = true }: { visible?: boolean }) {
-  const status = useModelStatus()
+  // While the parent is busy, force fast (500 ms) polling so we catch the
+  // brief load-from-warm-cache transition (~5 s) instead of missing it
+  // between 10 s idle polls.
+  const status = useModelStatus(visible)
   if (!visible) return null
   if (!status) return null
   if (status.state !== 'downloading' && status.state !== 'loading') return null
