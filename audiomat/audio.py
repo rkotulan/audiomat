@@ -21,6 +21,7 @@ import subprocess
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import imageio_ffmpeg
 
@@ -280,6 +281,7 @@ def build_m4b(
     chunks_root: Path,
     out_path: Path,
     meta: M4BMetadata,
+    progress_cb: Callable[[float], None] | None = None,
 ) -> tuple[int, int]:
     """Build an M4B from per-chapter WAVs in ``chunks_root``.
 
@@ -289,6 +291,11 @@ def build_m4b(
 
     Cover art is optional — if provided as ``meta.cover``, it's attached as
     the front cover (audiobook player thumbnail).
+
+    If ``progress_cb`` is given, ffmpeg is run with ``-progress pipe:1`` and
+    the callback fires with a 0-100 percent on each progress frame
+    (~every 500 ms). Without the callback, ffmpeg runs in legacy
+    blocking mode.
     """
     items = collect_chapter_wavs(chunks_root)
     if not items:
@@ -299,6 +306,8 @@ def build_m4b(
     list_path = out_path.parent / f"_m4b_concat_{out_path.stem}.txt"
     _write_m4b_metadata(meta_path, items, meta)
     _write_concat_list(list_path, items)
+
+    total_ms = sum(d for _, _, d in items)
 
     cmd = [
         ffmpeg_path(), "-y", "-hide_banner", "-loglevel", "error",
@@ -313,16 +322,78 @@ def build_m4b(
         "-c:a", "aac", "-b:a", meta.bitrate, "-ac", "1",
         "-movflags", "+faststart",
         "-f", "mp4",
-        str(out_path),
     ]
+    if progress_cb is not None:
+        cmd += ["-progress", "pipe:1"]
+    cmd += [str(out_path)]
+
     try:
-        _run(cmd, f"build_m4b → {out_path.name}")
+        if progress_cb is None:
+            _run(cmd, f"build_m4b → {out_path.name}")
+        else:
+            _run_ffmpeg_with_progress(
+                cmd,
+                f"build_m4b → {out_path.name}",
+                progress_cb,
+                total_ms,
+            )
     finally:
         meta_path.unlink(missing_ok=True)
         list_path.unlink(missing_ok=True)
 
-    total_ms = sum(d for _, _, d in items)
     return len(items), total_ms
+
+
+def _run_ffmpeg_with_progress(
+    cmd: list[str],
+    context: str,
+    progress_cb: Callable[[float], None],
+    total_ms: int,
+) -> None:
+    """Run ffmpeg streaming `-progress pipe:1` output, calling
+    ``progress_cb(percent)`` each time the encoder advances. Throttled
+    to 0.5 percentage point increments so the consumer isn't flooded.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    last_pct = -1.0
+    total_us = total_ms * 1000
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.strip()
+            if not line.startswith("out_time_us="):
+                continue
+            try:
+                cur_us = int(line.split("=", 1)[1])
+            except ValueError:
+                continue
+            if total_us <= 0:
+                continue
+            pct = max(0.0, min(100.0, (cur_us / total_us) * 100.0))
+            if pct - last_pct >= 0.5:
+                progress_cb(pct)
+                last_pct = pct
+    finally:
+        rc = proc.wait()
+        err_tail = proc.stderr.read() if proc.stderr else ""
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            proc.stderr.close()
+    if rc != 0:
+        tail = (err_tail or "").strip().splitlines()[-20:]
+        raise RuntimeError(
+            f"{context} failed (rc={rc}): " + "\n".join(tail)
+        )
+    progress_cb(100.0)
 
 
 if __name__ == "__main__":

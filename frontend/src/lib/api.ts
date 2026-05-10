@@ -221,8 +221,63 @@ export const startRender = (slug: string, indices?: number[]) =>
 export const cancelRender = (slug: string) =>
   fetch(`${BASE}/projects/${slug}/cancel-render`, { method: 'POST' }).then(ok)
 
-export const buildM4b = (slug: string) =>
-  fetch(`${BASE}/projects/${slug}/build-m4b`, { method: 'POST' }).then(ok)
+export interface BuildM4bStarted {
+  chapters: number
+  duration_s: number
+}
+
+export interface BuildM4bComplete {
+  chapters: number
+  duration_s: number
+  size_bytes: number
+}
+
+export interface BuildM4bEvents {
+  onStarted?: (info: BuildM4bStarted) => void
+  onProgress?: (percent: number) => void
+}
+
+/** Stream M4B build progress via SSE so the user gets a live encoder
+ *  percent instead of a hung spinner. Resolves with the complete
+ *  payload (chapters + duration + final file size). */
+export async function buildM4b(
+  slug: string,
+  events: BuildM4bEvents = {},
+): Promise<BuildM4bComplete> {
+  const r = await fetch(`${BASE}/projects/${slug}/build-m4b`, { method: 'POST' })
+  if (!r.ok) {
+    const detail = await r.text().catch(() => r.statusText)
+    throw new Error(`${r.status} ${r.statusText}: ${detail}`)
+  }
+  if (!r.body) throw new Error('build-m4b: no response body')
+
+  const reader = r.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    let sep
+    while ((sep = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      const evt = parseSSE(block)
+      if (!evt) continue
+      if (evt.event === 'started') {
+        events.onStarted?.(evt.data)
+      } else if (evt.event === 'progress') {
+        events.onProgress?.(evt.data.percent)
+      } else if (evt.event === 'error') {
+        throw new Error(evt.data?.message ?? 'M4B build failed')
+      } else if (evt.event === 'complete') {
+        return evt.data as BuildM4bComplete
+      }
+    }
+  }
+  throw new Error('build-m4b: stream ended without complete event')
+}
 
 export const projectM4bUrl = (slug: string) => `${BASE}/projects/${slug}/m4b`
 

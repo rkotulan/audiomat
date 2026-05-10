@@ -72,6 +72,7 @@ export function ProjectDetail() {
   const [renderEvents, setRenderEvents] = useState<ProgressEvent[]>([])
   const [latest, setLatest] = useState<ProgressEvent | null>(null)
   const [chapters, setChapters] = useState<ChaptersResponse | null>(null)
+  const [m4bPercent, setM4bPercent] = useState<number | null>(null)
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
   const unsubRef = useRef<(() => void) | null>(null)
   const { confirm, dialog: confirmDialog } = useConfirm()
@@ -210,13 +211,18 @@ export function ProjectDetail() {
   const onBuildM4b = async () => {
     setBusy(true)
     setErr('')
+    setM4bPercent(null)
     try {
-      await buildM4b(slug)
+      await buildM4b(slug, {
+        onStarted: () => setM4bPercent(0),
+        onProgress: (p) => setM4bPercent(p),
+      })
       refresh()
     } catch (e) {
       setErr(String(e))
     } finally {
       setBusy(false)
+      setM4bPercent(null)
     }
   }
 
@@ -585,9 +591,15 @@ export function ProjectDetail() {
                       disabled={busy || (chapters?.rendered_count ?? 0) === 0}
                     >
                       <Hammer className="h-4 w-4" />
-                      Rebuild M4B
+                      {busy ? 'Building…' : 'Rebuild M4B'}
                     </Button>
                   </div>
+                  {busy && m4bPercent != null && (
+                    <InlineProgressCard
+                      message="Building M4B…"
+                      percent={m4bPercent}
+                    />
+                  )}
                 </>
               ) : (
                 <>
@@ -601,10 +613,18 @@ export function ProjectDetail() {
                     disabled={busy || (chapters?.rendered_count ?? 0) === 0}
                   >
                     <Hammer className="h-4 w-4" />
-                    {chapters && chapters.rendered_count > 0
+                    {busy
+                      ? 'Building…'
+                      : chapters && chapters.rendered_count > 0
                       ? `Build M4B (${chapters.rendered_count}/${chapters.renderable_total})`
                       : 'Build M4B'}
                   </Button>
+                  {busy && m4bPercent != null && (
+                    <InlineProgressCard
+                      message="Building M4B…"
+                      percent={m4bPercent}
+                    />
+                  )}
                 </>
               )}
             </CardContent>

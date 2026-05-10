@@ -1209,10 +1209,29 @@ async def progress_stream(slug: str):
 @app.post("/api/projects/{slug}/build-m4b")
 def build_project_m4b(slug: str):
     """After render completes, concatenate per-chapter WAVs into the
-    final M4B with chapter markers + metadata."""
+    final M4B with chapter markers + metadata. Streams progress as SSE.
+
+    Events:
+      * ``started`` — chapter count + estimated total duration
+      * ``progress`` — encoder percent (0–100, ~every 500 ms)
+      * ``complete`` — out path, size, chapters, duration
+      * ``error`` — message
+    """
+    import json as _json
+    import queue as _queue
+    import threading as _threading
+
+    from audiomat.audio import collect_chapter_wavs
+
     proj = _load_project_or_404(slug)
     if not proj.chunks_dir.exists():
         raise HTTPException(400, "no chapter outputs — render first")
+
+    items_preview = collect_chapter_wavs(proj.chunks_dir)
+    if not items_preview:
+        raise HTTPException(400, "no chapter WAVs — render at least one chapter first")
+    pre_chapter_count = len(items_preview)
+    pre_total_ms = sum(d for _, _, d in items_preview)
 
     voice_label = proj.voice_ref
     meta = M4BMetadata(
@@ -1221,22 +1240,71 @@ def build_project_m4b(slug: str):
         album=proj.book.title or proj.name,
         narrator=f"{voice_label} (audiomat / OmniVoice)",
     )
-    try:
-        chapter_count, total_ms = build_m4b(
-            chunks_root=proj.chunks_dir,
-            out_path=proj.final_path,
-            meta=meta,
-        )
-    except Exception as e:
-        raise HTTPException(500, f"M4B build failed: {e}")
-    proj.set_status(phase="complete")
-    proj.append_log(f"M4B built: {chapter_count} chapters, {total_ms / 1000:.1f}s total")
-    return {
-        "out": str(proj.final_path),
-        "chapters": chapter_count,
-        "duration_s": total_ms / 1000,
-        "size_bytes": proj.final_path.stat().st_size,
-    }
+
+    q: _queue.Queue = _queue.Queue()
+
+    def worker():
+        def cb(pct: float) -> None:
+            q.put(("progress", pct))
+        try:
+            chapter_count, total_ms = build_m4b(
+                chunks_root=proj.chunks_dir,
+                out_path=proj.final_path,
+                meta=meta,
+                progress_cb=cb,
+            )
+            q.put(("complete", (chapter_count, total_ms)))
+        except Exception as e:
+            q.put(("error", f"{type(e).__name__}: {e}"))
+
+    t = _threading.Thread(target=worker, daemon=True, name=f"m4b-{slug}")
+    t.start()
+
+    def event_gen():
+        yield {
+            "event": "started",
+            "data": _json.dumps({
+                "chapters": pre_chapter_count,
+                "duration_s": pre_total_ms / 1000,
+            }),
+        }
+        while True:
+            kind, payload = q.get()
+            if kind == "progress":
+                yield {
+                    "event": "progress",
+                    "data": _json.dumps({"percent": payload}),
+                }
+            elif kind == "complete":
+                chapter_count, total_ms = payload
+                proj.set_status(phase="complete")
+                proj.append_log(
+                    f"M4B built: {chapter_count} chapters, "
+                    f"{total_ms / 1000:.1f}s total"
+                )
+                size = (
+                    proj.final_path.stat().st_size
+                    if proj.final_path.exists()
+                    else 0
+                )
+                yield {
+                    "event": "complete",
+                    "data": _json.dumps({
+                        "chapters": chapter_count,
+                        "duration_s": total_ms / 1000,
+                        "size_bytes": size,
+                    }),
+                }
+                break
+            elif kind == "error":
+                yield {
+                    "event": "error",
+                    "data": _json.dumps({"message": payload}),
+                }
+                break
+        t.join(timeout=5)
+
+    return EventSourceResponse(event_gen())
 
 
 @app.get("/api/projects/{slug}/m4b")
