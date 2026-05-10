@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
+  ArrowRight,
   Play,
   Hammer,
   Download,
@@ -36,6 +37,7 @@ export function ProjectDetail() {
   const nav = useNavigate()
 
   const [project, setProject] = useState<Project | null>(null)
+  const [tab, setTab] = useState<string>('overview')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [renderEvents, setRenderEvents] = useState<ProgressEvent[]>([])
@@ -150,7 +152,7 @@ export function ProjectDetail() {
         </div>
       )}
 
-      <Tabs defaultValue="overview">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
@@ -182,39 +184,21 @@ export function ProjectDetail() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Render params</CardTitle>
-            </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-              <Row label="num_step" value={String(project.params.num_step)} mono />
-              <Row
-                label="guidance_scale"
-                value={project.params.guidance_scale.toFixed(2)}
-                mono
-              />
-              <Row label="speed" value={project.params.speed.toFixed(2)} mono />
-              <Row
-                label="chunks (chars)"
-                value={`${project.params.min_chars}–${project.params.max_chars}`}
-                mono
-              />
-              <Row
-                label="target LUFS"
-                value={project.params.target_lufs.toFixed(1)}
-                mono
-              />
-              <Row
-                label="silence gap"
-                value={`${project.params.silence_gap_ms} ms`}
-                mono
-              />
-            </CardContent>
-          </Card>
+          <div className="flex justify-end">
+            <Button onClick={() => setTab('preview')}>
+              Next: preview voice
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="preview" className="space-y-4 pt-4">
-          <PreviewTab project={project} slug={slug} onApply={refresh} />
+          <PreviewTab
+            project={project}
+            slug={slug}
+            onApply={refresh}
+            onPicked={() => setTab('render')}
+          />
         </TabsContent>
 
         <TabsContent value="render" className="space-y-4 pt-4">
@@ -395,10 +379,12 @@ function PreviewTab({
   project,
   slug,
   onApply,
+  onPicked,
 }: {
   project: Project
   slug: string
   onApply: () => void
+  onPicked: () => void
 }) {
   const [matrix, setMatrix] = useState<PreviewMatrix | null>(null)
   const [busy, setBusy] = useState(false)
@@ -425,6 +411,7 @@ function PreviewTab({
         speed: variant.speed,
       })
       onApply()
+      onPicked()
     } catch (e) {
       alert(`Failed to apply params: ${e}`)
     }
@@ -508,13 +495,9 @@ function PreviewTab({
                 />
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span>{v.cached ? 'cached' : `${v.gen_seconds.toFixed(1)} s`}</span>
-                  <Button
-                    size="sm"
-                    variant={isCurrent(v) ? 'outline' : 'default'}
-                    disabled={isCurrent(v)}
-                    onClick={() => onPick(v)}
-                  >
-                    {isCurrent(v) ? 'Selected' : 'Use this'}
+                  <Button size="sm" onClick={() => onPick(v)}>
+                    Use this
+                    <ArrowRight className="h-3 w-3" />
                   </Button>
                 </div>
               </CardContent>
