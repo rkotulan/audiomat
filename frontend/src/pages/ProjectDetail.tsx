@@ -10,6 +10,7 @@ import {
   Wand2,
   Save,
   Star,
+  ChevronDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -282,12 +283,14 @@ export function ProjectDetail() {
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4 pt-4">
-          <AdvancedTab project={project} slug={slug} onSaved={refresh} />
           <Card>
             <CardHeader>
               <CardTitle className="text-destructive">Danger zone</CardTitle>
             </CardHeader>
             <CardContent>
+              <p className="text-sm text-muted-foreground mb-3">
+                Render parameters live on the Preview tab (Custom params section).
+              </p>
               <Button variant="destructive" onClick={onDelete}>
                 <Trash2 className="h-4 w-4" />
                 Delete project
@@ -462,6 +465,22 @@ function PreviewTab({
         </CardContent>
       </Card>
 
+      <details className="rounded-md border bg-card group">
+        <summary className="cursor-pointer select-none list-none px-4 py-3 flex items-center justify-between text-sm font-medium hover:bg-accent/50 transition-colors">
+          <span className="flex items-center gap-2">
+            <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+            Custom params
+          </span>
+          <span className="text-xs text-muted-foreground font-mono">
+            step {project.params.num_step} · gs {project.params.guidance_scale.toFixed(1)} ·{' '}
+            speed {project.params.speed.toFixed(2)}×
+          </span>
+        </summary>
+        <div className="border-t p-4">
+          <CustomParamsSection project={project} slug={slug} onSaved={onApply} />
+        </div>
+      </details>
+
       {matrix && (
         <div className="grid gap-4 md:grid-cols-2">
           {matrix.variants.map((v) => (
@@ -510,10 +529,12 @@ function PreviewTab({
 }
 
 // ----------------------------------------------------------------------------
-// Advanced tab — manual param tuning
+// Custom params — manual tuning panel embedded in the Preview tab
+// (collapsible <details> wrapper). Power-user knobs that complement the
+// 4-cell preset matrix above.
 // ----------------------------------------------------------------------------
 
-function AdvancedTab({
+function CustomParamsSection({
   project,
   slug,
   onSaved,
@@ -570,95 +591,91 @@ function AdvancedTab({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Render parameters</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <p className="text-sm text-muted-foreground">
-          Direct control over the OmniVoice generation knobs. Save invalidates
-          cached chunks for any chapter that hasn't yet been rendered with
-          the new params. Already-rendered chapters keep their existing
-          audio until you re-render them.
-        </p>
+    <div className="space-y-5">
+      <p className="text-xs text-muted-foreground">
+        Direct knobs for OmniVoice. The 4-cell matrix above renders fixed
+        presets — these sliders apply to your <em>actual book render</em>.
+        After saving, click <strong>Re-generate</strong> on the matrix if
+        you want to hear the new params on the sample. Save invalidates
+        cached chunks for any chapter not yet rendered with the new params.
+      </p>
 
-        <SliderRow
-          label="num_step"
-          hint="Diffusion steps. Higher = smoother, ~1.5× slower per +16."
-          value={params.num_step}
-          min={16}
-          max={64}
-          step={16}
-          format={(v) => String(v)}
-          onChange={(v) => setParams({ ...params, num_step: v })}
+      <SliderRow
+        label="num_step"
+        hint="Diffusion steps. Higher = smoother, ~1.5× slower per +16."
+        value={params.num_step}
+        min={16}
+        max={64}
+        step={16}
+        format={(v) => String(v)}
+        onChange={(v) => setParams({ ...params, num_step: v })}
+      />
+
+      <SliderRow
+        label="guidance_scale"
+        hint="Stronger conditioning on (text + voice). 2.0 default; 3.0+ may over-emphasize."
+        value={params.guidance_scale}
+        min={1.0}
+        max={4.0}
+        step={0.1}
+        format={(v) => v.toFixed(1)}
+        onChange={(v) => setParams({ ...params, guidance_scale: v })}
+      />
+
+      <SliderRow
+        label="speed"
+        hint="Speech tempo. 1.0 = natural. 0.85 = relaxed, 1.15 = brisk."
+        value={params.speed}
+        min={0.7}
+        max={1.3}
+        step={0.05}
+        format={(v) => v.toFixed(2) + '×'}
+        onChange={(v) => setParams({ ...params, speed: v })}
+      />
+
+      <Separator />
+
+      <div className="grid grid-cols-2 gap-4">
+        <NumberRow
+          label="min_chars"
+          hint="Chunk floor (info)"
+          value={params.min_chars}
+          onChange={(v) => setParams({ ...params, min_chars: v })}
         />
-
-        <SliderRow
-          label="guidance_scale"
-          hint="Stronger conditioning on (text + voice). 2.0 default; 3.0+ may over-emphasize."
-          value={params.guidance_scale}
-          min={1.0}
-          max={4.0}
-          step={0.1}
-          format={(v) => v.toFixed(1)}
-          onChange={(v) => setParams({ ...params, guidance_scale: v })}
+        <NumberRow
+          label="max_chars"
+          hint="Chunk cap (90–250)"
+          value={params.max_chars}
+          onChange={(v) => setParams({ ...params, max_chars: v })}
         />
-
-        <SliderRow
-          label="speed"
-          hint="Speech tempo. 1.0 = natural. 0.85 = relaxed, 1.15 = brisk."
-          value={params.speed}
-          min={0.7}
-          max={1.3}
-          step={0.05}
-          format={(v) => v.toFixed(2) + '×'}
-          onChange={(v) => setParams({ ...params, speed: v })}
+        <NumberRow
+          label="target_lufs"
+          hint="-23 classic, -16 audiobook, -14 louder"
+          value={params.target_lufs}
+          onChange={(v) => setParams({ ...params, target_lufs: v })}
+          step={0.5}
         />
+        <NumberRow
+          label="silence_gap_ms"
+          hint="Inter-chunk pause"
+          value={params.silence_gap_ms}
+          onChange={(v) => setParams({ ...params, silence_gap_ms: v })}
+        />
+      </div>
 
-        <Separator />
-
-        <div className="grid grid-cols-2 gap-4">
-          <NumberRow
-            label="min_chars"
-            hint="Chunk floor (info)"
-            value={params.min_chars}
-            onChange={(v) => setParams({ ...params, min_chars: v })}
-          />
-          <NumberRow
-            label="max_chars"
-            hint="Chunk cap (90–250)"
-            value={params.max_chars}
-            onChange={(v) => setParams({ ...params, max_chars: v })}
-          />
-          <NumberRow
-            label="target_lufs"
-            hint="-23 classic, -16 audiobook, -14 louder"
-            value={params.target_lufs}
-            onChange={(v) => setParams({ ...params, target_lufs: v })}
-            step={0.5}
-          />
-          <NumberRow
-            label="silence_gap_ms"
-            hint="Inter-chunk pause"
-            value={params.silence_gap_ms}
-            onChange={(v) => setParams({ ...params, silence_gap_ms: v })}
-          />
+      <div className="flex items-center justify-between pt-2">
+        <span className="text-xs text-muted-foreground">{msg}</span>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={onReset} disabled={!dirty}>
+            Reset
+          </Button>
+          <Button onClick={onSave} disabled={!dirty || saving}>
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving…' : 'Save params'}
+          </Button>
         </div>
-
-        <div className="flex items-center justify-between pt-2">
-          <span className="text-xs text-muted-foreground">{msg}</span>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={onReset} disabled={!dirty}>
-              Reset
-            </Button>
-            <Button onClick={onSave} disabled={!dirty || saving}>
-              <Save className="h-4 w-4" />
-              {saving ? 'Saving…' : 'Save params'}
-            </Button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }
 
