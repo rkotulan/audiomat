@@ -30,7 +30,7 @@ to the same depth.
 ```bash
 docker run --gpus all -p 7860:7860 \
     -v audiomat-data:/data \
-    rkotulan/audiomat:latest
+    kotulan/audiomat:latest
 ```
 
 Open <http://localhost:7860>.
@@ -40,7 +40,7 @@ Or via compose:
 ```yaml
 services:
   audiomat:
-    image: rkotulan/audiomat:latest
+    image: kotulan/audiomat:latest
     ports: ["7860:7860"]
     volumes: [audiomat-data:/data]
     deploy:
