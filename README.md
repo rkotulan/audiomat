@@ -37,29 +37,91 @@ audiobook_maker, abogen, chatterbox-Audiobook, …). audiomat differs:
 - **Premium defaults.** `num_step=48`, `guidance_scale=2.0` baked in —
   validated via direct A/B against an original human recording.
 
-## Planned architecture (v0.1)
+## Tested alternatives
 
-| layer | choice |
-|---|---|
-| Backend | **FastAPI** + uvicorn (Python) |
-| Frontend | **Vite + React + TypeScript** SPA |
-| Styling | **Tailwind + shadcn/ui** |
-| Real-time progress | Server-Sent Events (SSE) |
-| TTS engine | OmniVoice (fixed) |
-| Inference device | GPU (CUDA) only |
-| Input formats | EPUB + TXT |
-| Project model | 1 book = 1 project, immutable name post-create |
-| Voice library | shared `voices/`, re-usable across projects |
-| Storage layout | `~/audiomat/{voices,projects,cache}/` (Docker: `/data/`) |
-| Preview | 4-cell parameter matrix (Fast / Balanced / Crisp / Stable) |
-| Render speed | OmniVoice native `speed` param (slider 0.7–1.3, default 1.0) |
-| UI design tooling | [ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) for component generation |
+Before settling on OmniVoice we A/B-tested several TTS engines on the same
+Czech reference voice (5–10 s clip, narrator Jitka Ježková). All samples
+below render the same Czech excerpt. Ratings are subjective on Czech
+narrative content; speed is end-to-end on a single RTX 5070 (12 GB).
 
-Single Docker image: multi-stage build compiles the React frontend, then
-copies `dist/` into the FastAPI container which serves both API and static
-assets on one port (default 7860).
+<table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Provider</th>
+<th>Cost</th>
+<th>License</th>
+<th>Speed</th>
+<th>Quality (CZ)</th>
+<th>Sample</th>
+</tr>
+</thead>
+<tbody>
 
-Detailed design doc to follow in `docs/` once code lands.
+<tr>
+<td><strong>OmniVoice</strong> ⭐ <em>winner</em></td>
+<td><a href="https://github.com/k2-fsa/OmniVoice">k2-fsa/OmniVoice</a></td>
+<td>Free</td>
+<td>Apache-2.0</td>
+<td>★★★★☆</td>
+<td>★★★★☆</td>
+<td><audio controls preload="none" src="samples/sample%20-%20omnivoice.wav"></audio></td>
+</tr>
+
+<tr>
+<td>Fish Speech S2-Pro</td>
+<td><a href="https://github.com/fishaudio/fish-speech">fishaudio</a> (model) + <a href="https://huggingface.co/mach9243/s2-pro-gguf">mach9243</a> (Q8_0 GGUF) via <code>s2.cpp</code> (Vulkan)</td>
+<td>Free <em>(non-commercial)</em></td>
+<td>Fish Audio Research License</td>
+<td>★☆☆☆☆</td>
+<td>★★★★☆</td>
+<td><audio controls preload="none" src="samples/sample%20-%20s2pro.wav"></audio></td>
+</tr>
+
+<tr>
+<td>Chatterbox-CZ</td>
+<td><a href="https://github.com/resemble-ai/chatterbox">Resemble AI</a> + <a href="https://huggingface.co/Thomcles/Chatterbox-TTS-Czech">Thomcles CZ fine-tune</a></td>
+<td>Free</td>
+<td>MIT + CC0</td>
+<td>★★★★☆</td>
+<td>★★★★☆</td>
+<td><audio controls preload="none" src="samples/sample%20-%20chatterbox.wav"></audio></td>
+</tr>
+
+<tr>
+<td>XTTS v2</td>
+<td><a href="https://huggingface.co/coqui/XTTS-v2">coqui/XTTS-v2</a></td>
+<td>Free <em>(non-commercial)</em></td>
+<td>CPML</td>
+<td>★★★☆☆</td>
+<td>★★☆☆☆</td>
+<td><audio controls preload="none" src="samples/sample%20-%20xtts2.wav"></audio></td>
+</tr>
+
+<tr>
+<td>TopMediai (cloud)</td>
+<td><a href="https://www.topmediai.com/">topmediai.com</a></td>
+<td><strong>Paid</strong></td>
+<td>Commercial SaaS</td>
+<td>★★★★★</td>
+<td>★★★★★</td>
+<td><audio controls preload="none" src="samples/sample%20-%20topmediai.wav"></audio></td>
+</tr>
+
+</tbody>
+</table>
+
+TopMediai is the highest-quality option overall but it's a paid cloud
+service — out of scope for a local, offline-first audiobook tool.
+Among the self-hostable engines, OmniVoice and Chatterbox-CZ are roughly
+tied on Czech quality; OmniVoice wins on operational simplicity (single
+in-process model, no server lifecycle, no fine-tune dependency) and on
+multilingual reach (600+ languages out of the box). Fish Speech S2-Pro
+shipped the predecessor production cut (`Skleneny_muz_s2.m4b`, 13:46:33)
+but its `s2.cpp` Vulkan server has VRAM degradation that needed a
+render-loop restart wrapper, and the F16 weights OOMed on 12 GB VRAM
+(`s2-pro-q8_0-transformer-only.gguf` 5.0 GB + `s2-pro-q8_0-codec-only.gguf`
+976 MB was the only viable quantization).
 
 ## Install
 
