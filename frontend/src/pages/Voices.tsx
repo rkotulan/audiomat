@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Trash2, Download } from 'lucide-react'
+import { ArrowRight, BookOpen, Plus, Trash2, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -58,6 +58,26 @@ export function Voices() {
           </CardContent>
         </Card>
       ) : (
+        <Card className="bg-secondary/40 border-dashed">
+          <CardContent className="py-4 flex items-center justify-between gap-4">
+            <div className="text-sm">
+              <p className="font-medium">Next: create a project</p>
+              <p className="text-muted-foreground">
+                Pick a voice + an EPUB to render an audiobook.
+              </p>
+            </div>
+            <Button asChild>
+              <Link to="/projects/new">
+                <BookOpen className="h-4 w-4" />
+                New project
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {voices && voices.length > 0 && (
         <div className="grid gap-4 md:grid-cols-2">
           {voices.map((v) => (
             <Card key={v.name_slug}>
@@ -87,7 +107,13 @@ export function Voices() {
                   preload="metadata"
                   className="w-full h-9"
                 />
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" asChild>
+                    <Link to={`/projects/new?voice=${v.name_slug}`}>
+                      <BookOpen className="h-3 w-3" />
+                      Use in project
+                    </Link>
+                  </Button>
                   <Button size="sm" variant="outline" asChild>
                     <a
                       href={voiceAudioUrl(v.name_slug)}
@@ -100,7 +126,7 @@ export function Voices() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-destructive hover:text-destructive"
+                    className="text-destructive hover:text-destructive ml-auto"
                     onClick={() => onDelete(v.name_slug, v.name)}
                   >
                     <Trash2 className="h-3 w-3" />

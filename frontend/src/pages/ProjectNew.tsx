@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, BookOpen, Wand2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,7 +10,10 @@ import type { Voice } from '@/lib/types'
 
 export function ProjectNew() {
   const nav = useNavigate()
+  const [searchParams] = useSearchParams()
   const fileRef = useRef<HTMLInputElement>(null)
+
+  const requestedVoiceSlug = searchParams.get('voice') || ''
 
   const [voices, setVoices] = useState<Voice[]>([])
   const [name, setName] = useState('')
@@ -23,7 +26,14 @@ export function ProjectNew() {
     listVoices()
       .then((vs) => {
         setVoices(vs)
-        if (vs.length > 0 && !voiceRef) setVoiceRef(vs[0].name)
+        if (voiceRef) return
+        // Prefer ?voice=<slug> from query param if it matches a known voice
+        const fromQuery = vs.find((v) => v.name_slug === requestedVoiceSlug)
+        if (fromQuery) {
+          setVoiceRef(fromQuery.name)
+        } else if (vs.length > 0) {
+          setVoiceRef(vs[0].name)
+        }
       })
       .catch((e) => setErr(String(e)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
