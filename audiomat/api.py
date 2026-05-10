@@ -191,6 +191,20 @@ def auto_transcribe(req: TranscribeRequest):
     return {"transcript": text}
 
 
+@app.get("/api/voices/draft-audio")
+def draft_audio(path: str):
+    """Serve a previously-uploaded staged voice WAV so the UI can play it
+    back during the review stage. Security: only serves files inside an
+    ``audiomat_voice_*`` tempdir (created by /draft-upload). Any other
+    path is 404'd to prevent arbitrary filesystem reads."""
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(404, "draft audio not found")
+    if not p.parent.name.startswith("audiomat_voice_"):
+        raise HTTPException(403, "path outside staging area")
+    return FileResponse(p, media_type="audio/wav")
+
+
 @app.post("/api/voices/draft-upload")
 async def draft_voice_upload(audio: UploadFile = File(...)):
     """Stage 1 of voice creation: upload + ffmpeg-convert to 24 kHz mono.

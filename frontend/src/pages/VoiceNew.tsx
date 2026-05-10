@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   autoTranscribe,
   createVoice,
+  draftAudioUrl,
   draftUploadVoice,
 } from '@/lib/api'
 import type { DraftUploadResult } from '@/lib/types'
@@ -125,21 +126,29 @@ export function VoiceNew() {
             <CardTitle>2. Review &amp; transcript</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-md bg-secondary/40 p-3 text-sm">
-              <div className="flex justify-between">
+            <div className="rounded-md bg-secondary/40 p-3 text-sm space-y-3">
+              <div className="grid grid-cols-3 gap-x-4 gap-y-1">
                 <span className="text-muted-foreground">Duration</span>
-                <span className="font-mono">{draft.duration_s.toFixed(2)} s</span>
-              </div>
-              <div className="flex justify-between">
+                <span className="font-mono col-span-2 text-right">
+                  {draft.duration_s.toFixed(2)} s
+                </span>
                 <span className="text-muted-foreground">Sample rate</span>
-                <span className="font-mono">{draft.sample_rate} Hz</span>
-              </div>
-              <div className="flex justify-between">
+                <span className="font-mono col-span-2 text-right">
+                  {draft.sample_rate} Hz
+                </span>
                 <span className="text-muted-foreground">Channels</span>
-                <span className="font-mono">{draft.channels}</span>
+                <span className="font-mono col-span-2 text-right">{draft.channels}</span>
               </div>
+              <audio
+                controls
+                src={draftAudioUrl(draft.audio_path)}
+                className="w-full"
+                preload="metadata"
+              >
+                Your browser doesn't support inline audio playback.
+              </audio>
               {draft.warning && (
-                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                <p className="text-xs text-amber-600 dark:text-amber-400">
                   ⚠ {draft.warning}
                 </p>
               )}

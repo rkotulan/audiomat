@@ -33,6 +33,9 @@ export async function draftUploadVoice(file: File): Promise<DraftUploadResult> {
   )
 }
 
+export const draftAudioUrl = (path: string) =>
+  `${BASE}/voices/draft-audio?path=${encodeURIComponent(path)}`
+
 export async function autoTranscribe(audio_path: string, language = 'cs') {
   return fetch(`${BASE}/voices/auto-transcribe`, {
     method: 'POST',
