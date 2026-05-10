@@ -157,22 +157,16 @@ def _dataclass_to_dict(obj: Any) -> dict:
 # ----------------------------------------------------------------------------
 
 
-@app.get("/api/voices", response_model=list[VoiceOut])
-def list_voices():
-    return [VoiceOut.from_voice(v) for v in Voice.list_all(PATHS.voices_root)]
-
-
-@app.get("/api/voices/{slug}", response_model=VoiceOut)
-def get_voice(slug: str):
-    target = PATHS.voice_dir(slug)
-    if not (target / "meta.json").exists():
-        raise HTTPException(404, f"voice not found: {slug}")
-    return VoiceOut.from_voice(Voice.load(target))
-
+# ---- specific voice routes (must come BEFORE /api/voices/{slug} catchall) ----
 
 class TranscribeRequest(BaseModel):
     audio_path: str       # path produced by /api/voices/draft-upload
     language: str = "cs"
+
+
+@app.get("/api/voices", response_model=list[VoiceOut])
+def list_voices():
+    return [VoiceOut.from_voice(v) for v in Voice.list_all(PATHS.voices_root)]
 
 
 @app.post("/api/voices/auto-transcribe")
@@ -196,12 +190,17 @@ def draft_audio(path: str):
     """Serve a previously-uploaded staged voice WAV so the UI can play it
     back during the review stage. Security: only serves files inside an
     ``audiomat_voice_*`` tempdir (created by /draft-upload). Any other
-    path is 404'd to prevent arbitrary filesystem reads."""
+    path is 404'd to prevent arbitrary filesystem reads.
+
+    NOTE: this route MUST be registered before ``/api/voices/{slug}``,
+    otherwise FastAPI matches the path-suffix as a slug — a nasty silent
+    routing bug we hit during v0.0.1 testing.
+    """
     p = Path(path)
     if not p.exists() or not p.is_file():
-        raise HTTPException(404, "draft audio not found")
+        raise HTTPException(404, f"draft audio not found at {p}")
     if not p.parent.name.startswith("audiomat_voice_"):
-        raise HTTPException(403, "path outside staging area")
+        raise HTTPException(403, f"path outside staging area: parent={p.parent.name!r}")
     return FileResponse(p, media_type="audio/wav")
 
 
@@ -288,6 +287,14 @@ async def create_voice(
             shutil.rmtree(src.parent, ignore_errors=True)
 
     return VoiceOut.from_voice(voice)
+
+
+@app.get("/api/voices/{slug}", response_model=VoiceOut)
+def get_voice(slug: str):
+    target = PATHS.voice_dir(slug)
+    if not (target / "meta.json").exists():
+        raise HTTPException(404, f"voice not found: {slug}")
+    return VoiceOut.from_voice(Voice.load(target))
 
 
 @app.delete("/api/voices/{slug}")
