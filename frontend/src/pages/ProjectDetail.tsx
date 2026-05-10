@@ -784,17 +784,26 @@ function PreviewTab({
   const [err, setErr] = useState('')
   const [tuningIndex, setTuningIndex] = useState<number | null>(null)
   const [tunedFlags, setTunedFlags] = useState<Set<number>>(new Set())
+  const [cellsDone, setCellsDone] = useState(0)
+  const [cellsTotal, setCellsTotal] = useState(0)
 
   const onGenerate = async () => {
     setBusy(true)
     setErr('')
+    setCellsDone(0)
+    setCellsTotal(0)
     try {
-      const m = await previewMatrix(slug)
+      const m = await previewMatrix(slug, {
+        onStarted: (h) => setCellsTotal(h.total),
+        onCellDone: (idx) => setCellsDone(idx + 1),
+      })
       setMatrix(m)
     } catch (e) {
       setErr(String(e))
     } finally {
       setBusy(false)
+      setCellsDone(0)
+      setCellsTotal(0)
     }
   }
 
@@ -854,7 +863,13 @@ function PreviewTab({
           <div className="flex gap-2">
             <Button onClick={onGenerate} disabled={busy}>
               <Wand2 className="h-4 w-4" />
-              {busy ? 'Generating…' : matrix ? 'Re-generate' : 'Generate matrix'}
+              {busy
+                ? cellsTotal > 0
+                  ? `Generating ${cellsDone}/${cellsTotal}…`
+                  : 'Generating…'
+                : matrix
+                ? 'Re-generate'
+                : 'Generate matrix'}
             </Button>
           </div>
           <InlineModelProgress visible={busy} />

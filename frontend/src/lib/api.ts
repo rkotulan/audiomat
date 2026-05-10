@@ -107,10 +107,86 @@ export const updateBlocksSkipped = (slug: string, indices: number[]) =>
 export const deleteProject = (slug: string) =>
   fetch(`${BASE}/projects/${slug}`, { method: 'DELETE' }).then(ok)
 
-export const previewMatrix = (slug: string): Promise<PreviewMatrix> =>
-  fetch(`${BASE}/projects/${slug}/preview-matrix`, { method: 'POST' }).then(
-    ok<PreviewMatrix>,
-  )
+export interface PreviewMatrixEvents {
+  onStarted?: (header: Omit<PreviewMatrix, 'variants'> & { total: number }) => void
+  onCellDone?: (index: number, variant: PreviewMatrix['variants'][number]) => void
+  onError?: (message: string) => void
+}
+
+/** Stream the 4-cell preview matrix. Backend yields SSE events as each
+ *  cell finishes; we surface them so the UI can show "X / 4 done"
+ *  progress instead of a hung spinner. Resolves with the full matrix
+ *  on the ``complete`` event. */
+export async function previewMatrix(
+  slug: string,
+  events: PreviewMatrixEvents = {},
+): Promise<PreviewMatrix> {
+  const r = await fetch(`${BASE}/projects/${slug}/preview-matrix`, {
+    method: 'POST',
+  })
+  if (!r.ok) {
+    const detail = await r.text().catch(() => r.statusText)
+    throw new Error(`${r.status} ${r.statusText}: ${detail}`)
+  }
+  if (!r.body) throw new Error('preview-matrix: no response body')
+
+  const reader = r.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let header: (Omit<PreviewMatrix, 'variants'> & { total: number }) | null = null
+  const variants: PreviewMatrix['variants'][number][] = []
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let sep
+    while ((sep = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      const evt = parseSSE(block)
+      if (!evt) continue
+      if (evt.event === 'started') {
+        header = evt.data
+        events.onStarted?.(evt.data)
+      } else if (evt.event === 'cell_done') {
+        variants[evt.data.index] = evt.data.variant
+        events.onCellDone?.(evt.data.index, evt.data.variant)
+      } else if (evt.event === 'error') {
+        const msg = evt.data?.message ?? 'unknown error'
+        events.onError?.(msg)
+        throw new Error(msg)
+      } else if (evt.event === 'complete') {
+        // header is guaranteed by the server contract (started fires first)
+        if (!header) throw new Error('preview-matrix: complete without started')
+        return {
+          sample_text: header.sample_text,
+          sample_chars: header.sample_chars,
+          sample_block_index: header.sample_block_index,
+          sample_block_total: header.sample_block_total,
+          total_book_chars: header.total_book_chars,
+          variants: evt.data.variants,
+        }
+      }
+    }
+  }
+  throw new Error('preview-matrix: stream ended without complete event')
+}
+
+function parseSSE(block: string): { event: string; data: any } | null {
+  let event = 'message'
+  const dataLines: string[] = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+  }
+  if (dataLines.length === 0) return null
+  try {
+    return { event, data: JSON.parse(dataLines.join('\n')) }
+  } catch {
+    return null
+  }
+}
 
 export const previewCustom = (
   slug: string,

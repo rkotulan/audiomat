@@ -37,6 +37,7 @@ from audiomat.audio import (
     convert_voice_ref,
 )
 from audiomat.epub import parse_epub
+from audiomat.num2text import normalize_lang
 from audiomat.paths import AudiomatPaths
 from audiomat.project import (
     BookInfo,
@@ -717,15 +718,28 @@ def _pick_sample_text(
 @app.post("/api/projects/{slug}/preview-matrix")
 def preview_matrix(slug: str):
     """Render the 4 default preview variants on a representative sample
-    from the project's book. Cached per (text, num_step, gs, speed) under
-    ``<project>/previews/``. First call ~22 s on RTX 5070 (sequential
-    OmniVoice inference). Subsequent calls = cache hits, instant.
+    from the project's book and stream cell-by-cell progress as SSE.
+
+    Events emitted:
+
+    * ``started`` — header (sample text + totals + cell count)
+    * ``cell_done`` — one variant finished (index + full variant payload)
+    * ``complete`` — all variants done, full ``variants`` array
+    * ``error`` — generation failed mid-stream
+
+    Cached per (text, num_step, gs, speed, voice) under
+    ``<project>/previews/``. Cache hits stream out instantly; misses
+    take ~5 s per cell on RTX 5070.
     """
     import hashlib
+    import json as _json
     import time
     import soundfile as sf
     from audiomat.headers import prepare_for_tts
 
+    # Validate up front — these raise HTTPException synchronously, so the
+    # client gets a 4xx without entering the SSE stream and seeing an
+    # "error" event mid-flight.
     proj = _load_project_or_404(slug)
     voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
     if voice is None:
@@ -747,63 +761,92 @@ def preview_matrix(slug: str):
 
     previews_dir = proj.dir / "previews"
     previews_dir.mkdir(exist_ok=True)
-    language = proj.book.language or "cs"
-    # The text the model actually sees: markers stripped, numbers spelled
-    # out. Returned to UI as sample_text so what's displayed matches what
-    # the model heard.
+    # EPUB DC metadata uses BCP 47 (cs-CZ); OmniVoice + num2words want
+    # ISO 639-1 (cs) — strip region suffix at the boundary.
+    language = normalize_lang(proj.book.language or "cs")
     clean = prepare_for_tts(sample_text, lang=language)
     ref_text = voice.transcript()
     ref_audio = str(voice.wav_path)
     total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
 
-    tts = _get_tts()
-    tts.load()
-    sr = tts.sample_rate
+    def event_gen():
+        tts = _get_tts()
+        tts.load()
+        sr = tts.sample_rate
 
-    results = []
-    for v in PREVIEW_MATRIX:
-        key_src = f"{clean}|{v['num_step']}|{v['guidance_scale']}|{v['speed']}|{voice.name_slug}"
-        key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
-        wav_path = previews_dir / f"{v['label']}_{key}.wav"
+        yield {
+            "event": "started",
+            "data": _json.dumps({
+                "total": len(PREVIEW_MATRIX),
+                "sample_text": clean,
+                "sample_chars": len(clean),
+                "sample_block_index": sample_block_index,
+                "sample_block_total": len(blocks),
+                "total_book_chars": total_book_chars,
+            }),
+        }
 
-        if wav_path.exists() and wav_path.stat().st_size > 1024:
-            results.append({
-                **v,
-                "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
-                "cached": True,
-                "gen_seconds": 0.0,
-                "duration_s": _wav_duration_s(wav_path),
-            })
-            continue
+        results: list[dict] = []
+        for idx, v in enumerate(PREVIEW_MATRIX):
+            try:
+                key_src = (
+                    f"{clean}|{v['num_step']}|{v['guidance_scale']}"
+                    f"|{v['speed']}|{voice.name_slug}"
+                )
+                key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
+                wav_path = previews_dir / f"{v['label']}_{key}.wav"
 
-        t0 = time.time()
-        audios = tts._model.generate(
-            text=clean,
-            language=language,
-            ref_text=ref_text,
-            ref_audio=ref_audio,
-            num_step=v["num_step"],
-            guidance_scale=v["guidance_scale"],
-            speed=v["speed"],
-        )
-        gen_s = time.time() - t0
-        sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
-        results.append({
-            **v,
-            "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
-            "cached": False,
-            "gen_seconds": round(gen_s, 2),
-            "duration_s": round(audios[0].shape[-1] / sr, 2),
-        })
+                if wav_path.exists() and wav_path.stat().st_size > 1024:
+                    cell = {
+                        **v,
+                        "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
+                        "cached": True,
+                        "gen_seconds": 0.0,
+                        "duration_s": _wav_duration_s(wav_path),
+                    }
+                else:
+                    t0 = time.time()
+                    audios = tts._model.generate(
+                        text=clean,
+                        language=language,
+                        ref_text=ref_text,
+                        ref_audio=ref_audio,
+                        num_step=v["num_step"],
+                        guidance_scale=v["guidance_scale"],
+                        speed=v["speed"],
+                    )
+                    gen_s = time.time() - t0
+                    sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+                    cell = {
+                        **v,
+                        "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
+                        "cached": False,
+                        "gen_seconds": round(gen_s, 2),
+                        "duration_s": round(audios[0].shape[-1] / sr, 2),
+                    }
+            except Exception as e:
+                yield {
+                    "event": "error",
+                    "data": _json.dumps({
+                        "index": idx,
+                        "label": v["label"],
+                        "message": str(e),
+                    }),
+                }
+                return
 
-    return {
-        "sample_text": clean,
-        "sample_chars": len(clean),
-        "sample_block_index": sample_block_index,
-        "sample_block_total": len(blocks),
-        "total_book_chars": total_book_chars,
-        "variants": results,
-    }
+            results.append(cell)
+            yield {
+                "event": "cell_done",
+                "data": _json.dumps({"index": idx, "variant": cell}),
+            }
+
+        yield {
+            "event": "complete",
+            "data": _json.dumps({"variants": results}),
+        }
+
+    return EventSourceResponse(event_gen())
 
 
 def _total_book_chars(blocks: list, blocks_skipped: list[int] | tuple[int, ...]) -> int:
@@ -861,7 +904,7 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
 
     previews_dir = proj.dir / "previews"
     previews_dir.mkdir(exist_ok=True)
-    language = proj.book.language or "cs"
+    language = normalize_lang(proj.book.language or "cs")
     clean = prepare_for_tts(sample_text, lang=language)
     total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
 
