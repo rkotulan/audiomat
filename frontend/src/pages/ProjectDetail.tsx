@@ -13,6 +13,8 @@ import {
   Sliders,
   CheckCheck,
   RotateCw,
+  Ban,
+  Undo2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -41,6 +43,7 @@ import {
   projectM4bUrl,
   startRender,
   subscribeProgress,
+  updateBlocksSkipped,
   updateProjectParams,
 } from '@/lib/api'
 import type {
@@ -346,6 +349,22 @@ export function ProjectDetail() {
             selectedIndices={selectedIndices}
             setSelectedIndices={setSelectedIndices}
             onRefresh={refreshChapters}
+            onToggleSkip={async (blockIndex, becomeSkipped) => {
+              if (!chapters) return
+              const current = chapters.chapters
+                .filter((c) => c.status === 'skipped')
+                .map((c) => c.block_index)
+              const next = becomeSkipped
+                ? [...current, blockIndex]
+                : current.filter((i) => i !== blockIndex)
+              try {
+                await updateBlocksSkipped(slug, next)
+                await refreshChapters()
+                refresh()
+              } catch (e) {
+                alert(`Failed to update skip list: ${e}`)
+              }
+            }}
           />
         </TabsContent>
 
@@ -1038,12 +1057,14 @@ function ChaptersListCard({
   selectedIndices,
   setSelectedIndices,
   onRefresh,
+  onToggleSkip,
 }: {
   slug: string
   chapters: ChaptersResponse | null
   selectedIndices: Set<number>
   setSelectedIndices: (s: Set<number>) => void
   onRefresh: () => void
+  onToggleSkip: (blockIndex: number, becomeSkipped: boolean) => void | Promise<void>
 }) {
   if (!chapters) {
     return (
@@ -1138,6 +1159,9 @@ function ChaptersListCard({
                   onToggle={() =>
                     c.renderable_index != null && toggleOne(c.renderable_index)
                   }
+                  onToggleSkip={() =>
+                    onToggleSkip(c.block_index, c.status !== 'skipped')
+                  }
                 />
               ))}
             </tbody>
@@ -1152,14 +1176,16 @@ function ChapterRow({
   chapter,
   selected,
   onToggle,
+  onToggleSkip,
 }: {
   chapter: Chapter
   selected: boolean
   onToggle: () => void
+  onToggleSkip: () => void
 }) {
   const isSkipped = chapter.status === 'skipped'
   return (
-    <tr className={`border-b last:border-b-0 ${isSkipped ? 'opacity-50' : ''}`}>
+    <tr className={`border-b last:border-b-0 ${isSkipped ? 'opacity-60' : ''}`}>
       <td className="px-3 py-2 align-top w-10">
         {!isSkipped && (
           <Checkbox checked={selected} onCheckedChange={onToggle} />
@@ -1196,8 +1222,19 @@ function ChapterRow({
           />
         )}
       </td>
-      <td className="px-3 py-2 align-top w-24 text-right">
-        <ChapterStatusBadge status={chapter.status} />
+      <td className="px-3 py-2 align-top w-32 text-right">
+        <div className="flex items-center justify-end gap-2">
+          <ChapterStatusBadge status={chapter.status} />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 w-7 p-0"
+            onClick={onToggleSkip}
+            title={isSkipped ? 'Unskip — include in render' : 'Skip — exclude from render'}
+          >
+            {isSkipped ? <Undo2 className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
+          </Button>
+        </div>
       </td>
     </tr>
   )

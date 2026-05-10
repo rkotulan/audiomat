@@ -97,6 +97,13 @@ export const updateProjectParams = (slug: string, params: Partial<Project['param
     body: JSON.stringify(params),
   }).then(ok<Project>)
 
+export const updateBlocksSkipped = (slug: string, indices: number[]) =>
+  fetch(`${BASE}/projects/${slug}/blocks-skipped`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ indices }),
+  }).then(ok<Project>)
+
 export const deleteProject = (slug: string) =>
   fetch(`${BASE}/projects/${slug}`, { method: 'DELETE' }).then(ok)
 

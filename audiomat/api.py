@@ -369,7 +369,7 @@ async def create_project(
             meta, blocks = parse_epub(book_tmp)
             book_meta = {
                 "blocks_total": len(blocks),
-                "blocks_skipped": [],
+                "blocks_skipped": _auto_skip_indices(blocks),
                 "title": meta.title,
                 "author": meta.author,
                 "language": meta.language,
@@ -392,6 +392,30 @@ async def create_project(
         raise HTTPException(409, str(e))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+    return ProjectOut.from_project(proj)
+
+
+class BlocksSkippedRequest(BaseModel):
+    indices: list[int]
+
+
+@app.patch("/api/projects/{slug}/blocks-skipped")
+def update_blocks_skipped(slug: str, req: BlocksSkippedRequest):
+    """Replace project.book.blocks_skipped. Used by the chapter table's
+    per-row Skip / Unskip toggle and by the auto-skip detector for
+    existing projects.
+
+    NOTE: changing blocks_skipped after some chapters have been rendered
+    leaves the old per-chapter dirs in <project>/chunks/ as orphans —
+    they're indexed under the old stem (renderable index changes when
+    skip list changes). They don't break anything currently because
+    /chapters reflects the current renderable list, but build_m4b's
+    alphabetical glob WILL pick orphan dirs up. Manually delete obsolete
+    dirs for now; future commit could auto-clean.
+    """
+    proj = _load_project_or_404(slug)
+    proj.book.blocks_skipped = sorted(set(req.indices))
+    proj.save()
     return ProjectOut.from_project(proj)
 
 
@@ -448,18 +472,47 @@ PREVIEW_MATRIX = [
 # Palmknihy / nakladatel watermark phrases land here. Add new patterns
 # only when you've seen them clobber a real preview.
 _METADATA_PATTERNS = (
+    # Czech CZ-ebook DRM watermarks
     "palmknihy",
     "kupující",
     "kupujici",
-    "isbn",
+    "kniha je určena",
+    "kniha jako celek",
     "neoprávněn",
+    "elektronických knih",
     "autorského práva",
     "trestního zákoníku",
-    "kniha je určena",
-    "elektronických knih",
-    "kniha jako celek",
+    # Generic copyright / imprint markers (CS + EN)
+    "copyright",
+    "©",
+    "isbn",
     "all rights reserved",
+    "published by",
+    "published in",
+    "published in agreement",
+    "translation ©",
+    "překlad ©",
+    "vydalo nakladatelství",
 )
+
+
+def _auto_skip_indices(blocks: list, max_scan: int = 10) -> list[int]:
+    """Scan the first ``max_scan`` blocks and return indices that look
+    like front-matter / DRM watermarks. Used by /projects POST to
+    pre-populate ``book.blocks_skipped`` on creation, so the user
+    doesn't have to manually deselect the Palmknihy notice / publisher
+    imprint before the first render.
+
+    Conservative: only first N blocks scanned (front-matter is at the
+    start), only flagged if a metadata pattern matches. Body chapters
+    that legitimately reference copyright (e.g. footnotes) survive.
+    """
+    out: list[int] = []
+    for i, b in enumerate(blocks[:max_scan]):
+        text = " ".join(b.sentences).strip() if b.sentences else (b.text or "")
+        if _is_metadata_block(text):
+            out.append(i)
+    return out
 
 
 def _is_metadata_block(text: str) -> bool:
