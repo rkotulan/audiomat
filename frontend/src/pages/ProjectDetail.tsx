@@ -1,21 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Play, Hammer, Download, Trash2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  Play,
+  Hammer,
+  Download,
+  Trash2,
+  Wand2,
+  Save,
+  Star,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { Slider } from '@/components/ui/slider'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   buildM4b,
   deleteProject,
   getProject,
+  previewMatrix,
   projectM4bUrl,
   startRender,
   subscribeProgress,
+  updateProjectParams,
 } from '@/lib/api'
-import type { Project, ProgressEvent } from '@/lib/types'
+import type { PreviewMatrix, Project, ProgressEvent } from '@/lib/types'
 
 export function ProjectDetail() {
   const { slug = '' } = useParams()
@@ -139,6 +153,7 @@ export function ProjectDetail() {
       <Tabs defaultValue="overview">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="preview">Preview</TabsTrigger>
           <TabsTrigger value="render">Render</TabsTrigger>
           <TabsTrigger value="output">Output</TabsTrigger>
           <TabsTrigger value="advanced">Advanced</TabsTrigger>
@@ -196,6 +211,10 @@ export function ProjectDetail() {
               />
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="preview" className="space-y-4 pt-4">
+          <PreviewTab project={project} slug={slug} onApply={refresh} />
         </TabsContent>
 
         <TabsContent value="render" className="space-y-4 pt-4">
@@ -279,20 +298,12 @@ export function ProjectDetail() {
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4 pt-4">
+          <AdvancedTab project={project} slug={slug} onSaved={refresh} />
           <Card>
             <CardHeader>
-              <CardTitle>Danger zone</CardTitle>
+              <CardTitle className="text-destructive">Danger zone</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
-              <p className="text-sm text-muted-foreground">
-                Param tuning UI lands in v0.0.1. For now edit{' '}
-                <code className="text-xs">config.json</code> in the project directory
-                directly, or use the API:
-              </p>
-              <code className="block text-xs bg-muted p-2 rounded">
-                PATCH /api/projects/{slug}/params
-              </code>
-              <Separator className="my-4" />
+            <CardContent>
               <Button variant="destructive" onClick={onDelete}>
                 <Trash2 className="h-4 w-4" />
                 Delete project
@@ -374,4 +385,355 @@ function phaseVariant(
   if (phase === 'failed') return 'destructive'
   if (phase === 'rendering') return 'secondary'
   return 'outline'
+}
+
+// ----------------------------------------------------------------------------
+// Preview tab — 4-cell parameter matrix
+// ----------------------------------------------------------------------------
+
+function PreviewTab({
+  project,
+  slug,
+  onApply,
+}: {
+  project: Project
+  slug: string
+  onApply: () => void
+}) {
+  const [matrix, setMatrix] = useState<PreviewMatrix | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  const onGenerate = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const m = await previewMatrix(slug)
+      setMatrix(m)
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onPick = async (variant: PreviewMatrix['variants'][number]) => {
+    try {
+      await updateProjectParams(slug, {
+        num_step: variant.num_step,
+        guidance_scale: variant.guidance_scale,
+        speed: variant.speed,
+      })
+      onApply()
+    } catch (e) {
+      alert(`Failed to apply params: ${e}`)
+    }
+  }
+
+  const isCurrent = (v: PreviewMatrix['variants'][number]) =>
+    project.params.num_step === v.num_step &&
+    Math.abs(project.params.guidance_scale - v.guidance_scale) < 0.01 &&
+    Math.abs(project.params.speed - v.speed) < 0.01
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Parameter matrix</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Synthesize a representative ~30 s sample from the book at four
+            common parameter combinations. Listen, pick the variant that
+            sounds best, and the project's render params will switch to it.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            First call: ~22 s (sequential OmniVoice inference for 4 cells).
+            Subsequent calls re-use the cache.
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={onGenerate} disabled={busy}>
+              <Wand2 className="h-4 w-4" />
+              {busy ? 'Generating…' : matrix ? 'Re-generate' : 'Generate matrix'}
+            </Button>
+          </div>
+          {err && <div className="text-sm text-destructive">{err}</div>}
+          {matrix && (
+            <div className="rounded-md border bg-muted/40 p-3 text-xs">
+              <p className="font-medium mb-1">Sample text ({matrix.sample_chars} chars):</p>
+              <p className="italic line-clamp-3">{matrix.sample_text}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {matrix && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {matrix.variants.map((v) => (
+            <Card key={v.label} className={isCurrent(v) ? 'border-primary' : ''}>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    {v.label}
+                    {isCurrent(v) && (
+                      <Badge variant="default" className="font-normal">
+                        <Star className="h-3 w-3" /> current
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="text-xs text-muted-foreground font-normal font-mono">
+                    {v.duration_s.toFixed(1)} s
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div className="grid grid-cols-3 gap-2 text-xs text-muted-foreground">
+                  <span>num_step <span className="font-mono text-foreground">{v.num_step}</span></span>
+                  <span>gs <span className="font-mono text-foreground">{v.guidance_scale.toFixed(1)}</span></span>
+                  <span>speed <span className="font-mono text-foreground">{v.speed.toFixed(2)}</span></span>
+                </div>
+                <audio
+                  controls
+                  src={v.audio_url}
+                  preload="metadata"
+                  className="w-full h-9"
+                />
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{v.cached ? 'cached' : `${v.gen_seconds.toFixed(1)} s`}</span>
+                  <Button
+                    size="sm"
+                    variant={isCurrent(v) ? 'outline' : 'default'}
+                    disabled={isCurrent(v)}
+                    onClick={() => onPick(v)}
+                  >
+                    {isCurrent(v) ? 'Selected' : 'Use this'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------------------
+// Advanced tab — manual param tuning
+// ----------------------------------------------------------------------------
+
+function AdvancedTab({
+  project,
+  slug,
+  onSaved,
+}: {
+  project: Project
+  slug: string
+  onSaved: () => void
+}) {
+  const [params, setParams] = useState({
+    num_step: project.params.num_step,
+    guidance_scale: project.params.guidance_scale,
+    speed: project.params.speed,
+    min_chars: project.params.min_chars,
+    max_chars: project.params.max_chars,
+    target_lufs: project.params.target_lufs,
+    silence_gap_ms: project.params.silence_gap_ms,
+  })
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const dirty =
+    params.num_step !== project.params.num_step ||
+    params.guidance_scale !== project.params.guidance_scale ||
+    params.speed !== project.params.speed ||
+    params.min_chars !== project.params.min_chars ||
+    params.max_chars !== project.params.max_chars ||
+    params.target_lufs !== project.params.target_lufs ||
+    params.silence_gap_ms !== project.params.silence_gap_ms
+
+  const onSave = async () => {
+    setSaving(true)
+    setMsg('')
+    try {
+      await updateProjectParams(slug, params)
+      setMsg('Saved.')
+      onSaved()
+    } catch (e) {
+      setMsg(`Failed: ${e}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const onReset = () => {
+    setParams({
+      num_step: project.params.num_step,
+      guidance_scale: project.params.guidance_scale,
+      speed: project.params.speed,
+      min_chars: project.params.min_chars,
+      max_chars: project.params.max_chars,
+      target_lufs: project.params.target_lufs,
+      silence_gap_ms: project.params.silence_gap_ms,
+    })
+    setMsg('')
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Render parameters</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <p className="text-sm text-muted-foreground">
+          Direct control over the OmniVoice generation knobs. Save invalidates
+          cached chunks for any chapter that hasn't yet been rendered with
+          the new params. Already-rendered chapters keep their existing
+          audio until you re-render them.
+        </p>
+
+        <SliderRow
+          label="num_step"
+          hint="Diffusion steps. Higher = smoother, ~1.5× slower per +16."
+          value={params.num_step}
+          min={16}
+          max={64}
+          step={16}
+          format={(v) => String(v)}
+          onChange={(v) => setParams({ ...params, num_step: v })}
+        />
+
+        <SliderRow
+          label="guidance_scale"
+          hint="Stronger conditioning on (text + voice). 2.0 default; 3.0+ may over-emphasize."
+          value={params.guidance_scale}
+          min={1.0}
+          max={4.0}
+          step={0.1}
+          format={(v) => v.toFixed(1)}
+          onChange={(v) => setParams({ ...params, guidance_scale: v })}
+        />
+
+        <SliderRow
+          label="speed"
+          hint="Speech tempo. 1.0 = natural. 0.85 = relaxed, 1.15 = brisk."
+          value={params.speed}
+          min={0.7}
+          max={1.3}
+          step={0.05}
+          format={(v) => v.toFixed(2) + '×'}
+          onChange={(v) => setParams({ ...params, speed: v })}
+        />
+
+        <Separator />
+
+        <div className="grid grid-cols-2 gap-4">
+          <NumberRow
+            label="min_chars"
+            hint="Chunk floor (info)"
+            value={params.min_chars}
+            onChange={(v) => setParams({ ...params, min_chars: v })}
+          />
+          <NumberRow
+            label="max_chars"
+            hint="Chunk cap (90–250)"
+            value={params.max_chars}
+            onChange={(v) => setParams({ ...params, max_chars: v })}
+          />
+          <NumberRow
+            label="target_lufs"
+            hint="-23 classic, -16 audiobook, -14 louder"
+            value={params.target_lufs}
+            onChange={(v) => setParams({ ...params, target_lufs: v })}
+            step={0.5}
+          />
+          <NumberRow
+            label="silence_gap_ms"
+            hint="Inter-chunk pause"
+            value={params.silence_gap_ms}
+            onChange={(v) => setParams({ ...params, silence_gap_ms: v })}
+          />
+        </div>
+
+        <div className="flex items-center justify-between pt-2">
+          <span className="text-xs text-muted-foreground">{msg}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onReset} disabled={!dirty}>
+              Reset
+            </Button>
+            <Button onClick={onSave} disabled={!dirty || saving}>
+              <Save className="h-4 w-4" />
+              {saving ? 'Saving…' : 'Save params'}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function SliderRow({
+  label,
+  hint,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onChange,
+}: {
+  label: string
+  hint: string
+  value: number
+  min: number
+  max: number
+  step: number
+  format: (v: number) => string
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label className="font-mono">{label}</Label>
+        <span className="font-mono text-sm">{format(value)}</span>
+      </div>
+      <Slider
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={(v) => onChange(v[0] ?? value)}
+      />
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  )
+}
+
+function NumberRow({
+  label,
+  hint,
+  value,
+  onChange,
+  step = 1,
+}: {
+  label: string
+  hint: string
+  value: number
+  onChange: (v: number) => void
+  step?: number
+}) {
+  return (
+    <div className="space-y-1">
+      <Label className="font-mono text-xs">{label}</Label>
+      <Input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => {
+          const n = Number(e.target.value)
+          if (!Number.isNaN(n)) onChange(n)
+        }}
+      />
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  )
 }

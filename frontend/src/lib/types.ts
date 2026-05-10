@@ -83,3 +83,20 @@ export interface DraftUploadResult {
   channels: number
   warning: string
 }
+
+export interface PreviewVariant {
+  label: 'Fast' | 'Balanced' | 'Crisp' | 'Stable'
+  num_step: number
+  guidance_scale: number
+  speed: number
+  audio_url: string
+  cached: boolean
+  gen_seconds: number
+  duration_s: number
+}
+
+export interface PreviewMatrix {
+  sample_text: string
+  sample_chars: number
+  variants: PreviewVariant[]
+}

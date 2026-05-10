@@ -433,6 +433,130 @@ def _load_project_or_404(slug: str) -> Project:
 # ----------------------------------------------------------------------------
 
 
+# ---- preview matrix --------------------------------------------------------
+
+PREVIEW_MATRIX = [
+    {"label": "Fast",     "num_step": 32, "guidance_scale": 2.0, "speed": 1.0},
+    {"label": "Balanced", "num_step": 48, "guidance_scale": 2.0, "speed": 1.0},
+    {"label": "Crisp",    "num_step": 48, "guidance_scale": 2.5, "speed": 1.0},
+    {"label": "Stable",   "num_step": 64, "guidance_scale": 2.0, "speed": 1.0},
+]
+
+
+def _pick_sample_text(blocks: list, max_chars: int = 600) -> str | None:
+    """Find the first block whose joined sentences are ≥ 300 chars (skipping
+    short headers / front-matter / TOC fragments). Cap output at ``max_chars``
+    so each variant stays under ~30 s audio."""
+    for b in blocks:
+        joined = " ".join(b.sentences).strip()
+        if len(joined) >= 300:
+            return joined[:max_chars]
+    return None
+
+
+@app.post("/api/projects/{slug}/preview-matrix")
+def preview_matrix(slug: str):
+    """Render the 4 default preview variants on a representative sample
+    from the project's book. Cached per (text, num_step, gs, speed) under
+    ``<project>/previews/``. First call ~22 s on RTX 5070 (sequential
+    OmniVoice inference). Subsequent calls = cache hits, instant.
+    """
+    import hashlib
+    import time
+    import soundfile as sf
+    from audiomat.headers import strip_markers
+
+    proj = _load_project_or_404(slug)
+    voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
+    if voice is None:
+        raise HTTPException(404, f"voice not found: {proj.voice_ref}")
+    if not proj.book_path.exists():
+        raise HTTPException(400, f"book file missing: {proj.book_path}")
+
+    if proj.book.filename.endswith(".epub"):
+        _meta, blocks = parse_epub(proj.book_path)
+    else:
+        from audiomat.epub import Block, split_sentences
+        text = proj.book_path.read_text(encoding="utf-8")
+        blocks = [Block(text=text, sentences=split_sentences(text))]
+
+    sample_text = _pick_sample_text(blocks)
+    if sample_text is None:
+        raise HTTPException(400, "no block ≥ 300 chars found in book — preview needs prose")
+
+    previews_dir = proj.dir / "previews"
+    previews_dir.mkdir(exist_ok=True)
+    clean = strip_markers(sample_text)
+    ref_text = voice.transcript()
+    ref_audio = str(voice.wav_path)
+    language = proj.book.language or "cs"
+
+    tts = _get_tts()
+    tts.load()
+    sr = tts.sample_rate
+
+    results = []
+    for v in PREVIEW_MATRIX:
+        key_src = f"{clean}|{v['num_step']}|{v['guidance_scale']}|{v['speed']}|{voice.name_slug}"
+        key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
+        wav_path = previews_dir / f"{v['label']}_{key}.wav"
+
+        if wav_path.exists() and wav_path.stat().st_size > 1024:
+            results.append({
+                **v,
+                "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
+                "cached": True,
+                "gen_seconds": 0.0,
+                "duration_s": _wav_duration_s(wav_path),
+            })
+            continue
+
+        t0 = time.time()
+        audios = tts._model.generate(
+            text=clean,
+            language=language,
+            ref_text=ref_text,
+            ref_audio=ref_audio,
+            num_step=v["num_step"],
+            guidance_scale=v["guidance_scale"],
+            speed=v["speed"],
+        )
+        gen_s = time.time() - t0
+        sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+        results.append({
+            **v,
+            "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
+            "cached": False,
+            "gen_seconds": round(gen_s, 2),
+            "duration_s": round(audios[0].shape[-1] / sr, 2),
+        })
+
+    return {
+        "sample_text": sample_text,
+        "sample_chars": len(clean),
+        "variants": results,
+    }
+
+
+def _wav_duration_s(path: Path) -> float:
+    import wave
+    with wave.open(str(path), "rb") as w:
+        return w.getnframes() / w.getframerate()
+
+
+@app.get("/api/projects/{slug}/preview-audio/{filename}")
+def preview_audio(slug: str, filename: str):
+    """Serve a cached preview WAV. ``filename`` is the on-disk name returned
+    by /preview-matrix; we don't accept arbitrary paths."""
+    proj = _load_project_or_404(slug)
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "invalid filename")
+    target = proj.dir / "previews" / filename
+    if not target.exists():
+        raise HTTPException(404, "preview audio not found")
+    return FileResponse(target, media_type="audio/wav")
+
+
 @app.post("/api/projects/{slug}/render")
 async def start_render(slug: str):
     """Kick off background render. Returns immediately. Client connects to

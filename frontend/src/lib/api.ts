@@ -2,6 +2,7 @@
 // Vite proxies /api → :8000 in dev, so we can use relative paths everywhere.
 import type {
   DraftUploadResult,
+  PreviewMatrix,
   Project,
   ProgressEvent,
   Voice,
@@ -96,6 +97,11 @@ export const updateProjectParams = (slug: string, params: Partial<Project['param
 
 export const deleteProject = (slug: string) =>
   fetch(`${BASE}/projects/${slug}`, { method: 'DELETE' }).then(ok)
+
+export const previewMatrix = (slug: string): Promise<PreviewMatrix> =>
+  fetch(`${BASE}/projects/${slug}/preview-matrix`, { method: 'POST' }).then(
+    ok<PreviewMatrix>,
+  )
 
 export const startRender = (slug: string) =>
   fetch(`${BASE}/projects/${slug}/render`, { method: 'POST' }).then(ok)
