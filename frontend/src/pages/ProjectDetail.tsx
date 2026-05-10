@@ -431,10 +431,26 @@ export function ProjectDetail() {
               <CardTitle>M4B</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {chapters && chapters.renderable_total > 0 && (
+                <div className="rounded-md bg-secondary/40 p-3 text-sm space-y-1">
+                  <p className="font-medium">
+                    {chapters.rendered_count} / {chapters.renderable_total} chapters rendered
+                    {chapters.rendered_count === chapters.renderable_total ? ' ✓' : ''}
+                  </p>
+                  {chapters.rendered_count < chapters.renderable_total && (
+                    <p className="text-muted-foreground text-xs">
+                      Partial M4B is OK — you'll get an audiobook with whatever's
+                      currently rendered. Build again later to include new chapters.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {project.has_final_m4b ? (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    M4B has been built. Download or rebuild if you re-rendered chapters.
+                    M4B already built. Download below, or Rebuild after rendering
+                    more chapters / changing voice.
                   </p>
                   <div className="flex gap-2">
                     <Button asChild>
@@ -443,7 +459,11 @@ export function ProjectDetail() {
                         Download M4B
                       </a>
                     </Button>
-                    <Button variant="outline" onClick={onBuildM4b} disabled={busy}>
+                    <Button
+                      variant="outline"
+                      onClick={onBuildM4b}
+                      disabled={busy || (chapters?.rendered_count ?? 0) === 0}
+                    >
                       <Hammer className="h-4 w-4" />
                       Rebuild M4B
                     </Button>
@@ -452,15 +472,18 @@ export function ProjectDetail() {
               ) : (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    M4B not built yet. Run render first, then build M4B to concatenate
-                    chapter WAVs into the final audiobook with chapter markers.
+                    Concatenates per-chapter WAVs into a single M4B with chapter
+                    markers + ID3 metadata. Available as soon as one chapter
+                    finishes rendering.
                   </p>
                   <Button
                     onClick={onBuildM4b}
-                    disabled={busy || project.status.chapters_done === 0}
+                    disabled={busy || (chapters?.rendered_count ?? 0) === 0}
                   >
                     <Hammer className="h-4 w-4" />
-                    Build M4B
+                    {chapters && chapters.rendered_count > 0
+                      ? `Build M4B (${chapters.rendered_count}/${chapters.renderable_total})`
+                      : 'Build M4B'}
                   </Button>
                 </>
               )}
