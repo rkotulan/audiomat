@@ -31,10 +31,25 @@ _CZ_NORMALIZATIONS = (
 )
 
 
+def normalize_lang(lang: str | None) -> str:
+    """Normalize a BCP 47 language tag (``cs-CZ``, ``en-US``) to the
+    ISO 639-1 primary subtag (``cs``, ``en``) that ``num2words`` expects.
+    Empty / None defaults to ``"cs"``.
+    """
+    if not lang:
+        return "cs"
+    return lang.split("-")[0].split("_")[0].lower()
+
+
 def expand_numbers(text: str, lang: str = "cs") -> str:
     """Replace standalone integers in ``text`` with their spelled-out
-    word equivalents using ``num2words``. On non-Czech, applies no
-    post-normalization.
+    word equivalents using ``num2words``. On unsupported languages
+    (``num2words`` knows ~55 — see ``num2words.CONVERTER_CLASSES``)
+    the digits are left as-is and the TTS model handles them; typically
+    digit-by-digit reading.
+
+    BCP 47 tags from EPUB metadata (``cs-CZ``, ``en-US``) are accepted —
+    we strip to the primary subtag.
 
     Numbers attached to words ("Mgr.5"), inside identifiers, or longer
     than 9 digits (presumably IDs) are left alone.
@@ -46,15 +61,17 @@ def expand_numbers(text: str, lang: str = "cs") -> str:
             "num2words not installed — pip install num2words"
         ) from e
 
+    code = normalize_lang(lang)
+
     def repl(match: re.Match) -> str:
         try:
-            return num2words(int(match.group()), lang=lang)
+            return num2words(int(match.group()), lang=code)
         except (ValueError, NotImplementedError):
             return match.group()
 
     out = _NUMBER_RE.sub(repl, text)
 
-    if lang == "cs":
+    if code == "cs":
         for pattern, replacement in _CZ_NORMALIZATIONS:
             out = pattern.sub(replacement, out)
 
