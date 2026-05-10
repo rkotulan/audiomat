@@ -612,6 +612,84 @@ def _wav_duration_s(path: Path) -> float:
         return w.getnframes() / w.getframerate()
 
 
+class PreviewCustomRequest(BaseModel):
+    num_step: int = 48
+    guidance_scale: float = 2.0
+    speed: float = 1.0
+
+
+@app.post("/api/projects/{slug}/preview-custom")
+def preview_custom(slug: str, req: PreviewCustomRequest):
+    """Render ONE preview sample with the user-supplied params (NOT
+    persisted to project.params). Lets the user A/B custom slider values
+    before committing. Cached per (text, params, voice_slug)."""
+    import hashlib
+    import time
+    import soundfile as sf
+    from audiomat.headers import strip_markers
+
+    proj = _load_project_or_404(slug)
+    voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
+    if voice is None:
+        raise HTTPException(404, f"voice not found: {proj.voice_ref}")
+    if not proj.book_path.exists():
+        raise HTTPException(400, f"book file missing: {proj.book_path}")
+
+    if proj.book.filename.endswith(".epub"):
+        _meta, blocks = parse_epub(proj.book_path)
+    else:
+        from audiomat.epub import Block, split_sentences
+        text = proj.book_path.read_text(encoding="utf-8")
+        blocks = [Block(text=text, sentences=split_sentences(text))]
+
+    picked = _pick_sample_text(blocks, blocks_skipped=proj.book.blocks_skipped)
+    if picked is None:
+        raise HTTPException(400, "no block ≥ 300 chars found in book — preview needs prose")
+    sample_text, sample_block_index = picked
+
+    previews_dir = proj.dir / "previews"
+    previews_dir.mkdir(exist_ok=True)
+    clean = strip_markers(sample_text)
+
+    key_src = f"{clean}|{req.num_step}|{req.guidance_scale}|{req.speed}|{voice.name_slug}"
+    key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
+    wav_path = previews_dir / f"Custom_{key}.wav"
+
+    base = {
+        "num_step": req.num_step,
+        "guidance_scale": req.guidance_scale,
+        "speed": req.speed,
+        "sample_text": sample_text,
+        "sample_chars": len(clean),
+        "sample_block_index": sample_block_index,
+        "sample_block_total": len(blocks),
+        "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
+    }
+
+    if wav_path.exists() and wav_path.stat().st_size > 1024:
+        return {**base, "cached": True, "gen_seconds": 0.0,
+                "duration_s": _wav_duration_s(wav_path)}
+
+    tts = _get_tts()
+    tts.load()
+    sr = tts.sample_rate
+
+    t0 = time.time()
+    audios = tts._model.generate(
+        text=clean,
+        language=proj.book.language or "cs",
+        ref_text=voice.transcript(),
+        ref_audio=str(voice.wav_path),
+        num_step=req.num_step,
+        guidance_scale=req.guidance_scale,
+        speed=req.speed,
+    )
+    gen_s = time.time() - t0
+    sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+    return {**base, "cached": False, "gen_seconds": round(gen_s, 2),
+            "duration_s": round(audios[0].shape[-1] / sr, 2)}
+
+
 @app.get("/api/projects/{slug}/preview-audio/{filename}")
 def preview_audio(slug: str, filename: str):
     """Serve a cached preview WAV. ``filename`` is the on-disk name returned

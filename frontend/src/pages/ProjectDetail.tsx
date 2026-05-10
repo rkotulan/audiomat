@@ -25,13 +25,19 @@ import {
   buildM4b,
   deleteProject,
   getProject,
+  previewCustom,
   previewMatrix,
   projectM4bUrl,
   startRender,
   subscribeProgress,
   updateProjectParams,
 } from '@/lib/api'
-import type { PreviewMatrix, Project, ProgressEvent } from '@/lib/types'
+import type {
+  CustomPreviewResult,
+  PreviewMatrix,
+  Project,
+  ProgressEvent,
+} from '@/lib/types'
 
 export function ProjectDetail() {
   const { slug = '' } = useParams()
@@ -553,6 +559,8 @@ function CustomParamsSection({
     silence_gap_ms: project.params.silence_gap_ms,
   })
   const [saving, setSaving] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [previewResult, setPreviewResult] = useState<CustomPreviewResult | null>(null)
   const [msg, setMsg] = useState('')
   const dirty =
     params.num_step !== project.params.num_step ||
@@ -562,6 +570,12 @@ function CustomParamsSection({
     params.max_chars !== project.params.max_chars ||
     params.target_lufs !== project.params.target_lufs ||
     params.silence_gap_ms !== project.params.silence_gap_ms
+
+  const previewMatchesCurrent =
+    previewResult !== null &&
+    previewResult.num_step === params.num_step &&
+    Math.abs(previewResult.guidance_scale - params.guidance_scale) < 0.01 &&
+    Math.abs(previewResult.speed - params.speed) < 0.01
 
   const onSave = async () => {
     setSaving(true)
@@ -574,6 +588,24 @@ function CustomParamsSection({
       setMsg(`Failed: ${e}`)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const onPreview = async () => {
+    setPreviewing(true)
+    setMsg('')
+    try {
+      const result = await previewCustom(slug, {
+        num_step: params.num_step,
+        guidance_scale: params.guidance_scale,
+        speed: params.speed,
+      })
+      setPreviewResult(result)
+      setMsg(result.cached ? 'Cached.' : `Generated in ${result.gen_seconds.toFixed(1)} s.`)
+    } catch (e) {
+      setMsg(`Preview failed: ${e}`)
+    } finally {
+      setPreviewing(false)
     }
   }
 
@@ -669,12 +701,38 @@ function CustomParamsSection({
           <Button variant="outline" onClick={onReset} disabled={!dirty}>
             Reset
           </Button>
+          <Button variant="outline" onClick={onPreview} disabled={previewing}>
+            <Wand2 className="h-4 w-4" />
+            {previewing ? 'Generating…' : 'Preview these'}
+          </Button>
           <Button onClick={onSave} disabled={!dirty || saving}>
             <Save className="h-4 w-4" />
             {saving ? 'Saving…' : 'Save params'}
           </Button>
         </div>
       </div>
+
+      {previewResult && (
+        <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-medium">
+              Custom preview ({previewResult.duration_s.toFixed(1)} s,
+              step {previewResult.num_step} · gs{' '}
+              {previewResult.guidance_scale.toFixed(1)} · speed{' '}
+              {previewResult.speed.toFixed(2)}×)
+            </span>
+            <span className="text-muted-foreground font-mono">
+              {previewMatchesCurrent ? 'matches sliders' : 'sliders changed since render'}
+            </span>
+          </div>
+          <audio
+            controls
+            src={previewResult.audio_url}
+            preload="metadata"
+            className="w-full h-9"
+          />
+        </div>
+      )}
     </div>
   )
 }

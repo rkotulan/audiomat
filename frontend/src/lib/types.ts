@@ -102,3 +102,17 @@ export interface PreviewMatrix {
   sample_block_total: number
   variants: PreviewVariant[]
 }
+
+export interface CustomPreviewResult {
+  num_step: number
+  guidance_scale: number
+  speed: number
+  sample_text: string
+  sample_chars: number
+  sample_block_index: number
+  sample_block_total: number
+  audio_url: string
+  cached: boolean
+  gen_seconds: number
+  duration_s: number
+}

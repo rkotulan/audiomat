@@ -1,6 +1,7 @@
 // Tiny fetch wrapper for the audiomat FastAPI backend.
 // Vite proxies /api → :8000 in dev, so we can use relative paths everywhere.
 import type {
+  CustomPreviewResult,
   DraftUploadResult,
   PreviewMatrix,
   Project,
@@ -102,6 +103,16 @@ export const previewMatrix = (slug: string): Promise<PreviewMatrix> =>
   fetch(`${BASE}/projects/${slug}/preview-matrix`, { method: 'POST' }).then(
     ok<PreviewMatrix>,
   )
+
+export const previewCustom = (
+  slug: string,
+  params: { num_step: number; guidance_scale: number; speed: number },
+): Promise<CustomPreviewResult> =>
+  fetch(`${BASE}/projects/${slug}/preview-custom`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  }).then(ok<CustomPreviewResult>)
 
 export const startRender = (slug: string) =>
   fetch(`${BASE}/projects/${slug}/render`, { method: 'POST' }).then(ok)
