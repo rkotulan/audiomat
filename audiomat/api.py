@@ -910,6 +910,32 @@ def list_chapters(slug: str):
     }
 
 
+@app.delete("/api/projects/{slug}/chapters/{stem}")
+def reset_chapter(slug: str, stem: str):
+    """Wipe a single chapter's cache: removes ``<project>/chunks/<stem>/``
+    entirely (chunks, manifest, final wav). Next render starts fresh.
+
+    Use cases:
+      * Roll the diffusion dice again on a glitchy chapter (same text,
+        different sample).
+      * Force re-render after a voice or params change (the manifest
+        hash currently keys only on text — voice / num_step / gs / speed
+        changes don't auto-invalidate, this is a known v0.0.x limitation).
+
+    The chapters list endpoint sees status flip to ``pending`` on the
+    next call. Caller is responsible for triggering a render afterwards.
+    """
+    proj = _load_project_or_404(slug)
+    if "/" in stem or "\\" in stem or ".." in stem:
+        raise HTTPException(400, "invalid stem")
+    target = proj.chunks_dir / stem
+    if not target.exists():
+        raise HTTPException(404, f"chapter dir not found: {stem}")
+    shutil.rmtree(target, ignore_errors=True)
+    proj.append_log(f"reset chapter cache: {stem}")
+    return {"reset": stem}
+
+
 @app.get("/api/projects/{slug}/chapter-audio/{stem}")
 def chapter_audio(slug: str, stem: str):
     """Serve a per-chapter loudnorm-ed WAV for inline UI playback.

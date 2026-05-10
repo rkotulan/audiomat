@@ -128,6 +128,11 @@ export const listChapters = (slug: string): Promise<ChaptersResponse> =>
 export const chapterAudioUrl = (slug: string, stem: string) =>
   `${BASE}/projects/${slug}/chapter-audio/${encodeURIComponent(stem)}`
 
+export const resetChapter = (slug: string, stem: string) =>
+  fetch(`${BASE}/projects/${slug}/chapters/${encodeURIComponent(stem)}`, {
+    method: 'DELETE',
+  }).then(ok)
+
 export const startRender = (slug: string, indices?: number[]) =>
   fetch(`${BASE}/projects/${slug}/render`, {
     method: 'POST',

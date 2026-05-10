@@ -43,6 +43,7 @@ import {
   previewCustom,
   previewMatrix,
   projectM4bUrl,
+  resetChapter,
   startRender,
   subscribeProgress,
   updateBlocksSkipped,
@@ -390,6 +391,20 @@ export function ProjectDetail() {
                 refresh()
               } catch (e) {
                 alert(`Failed to update skip list: ${e}`)
+              }
+            }}
+            onResetChapter={async (stem, renderableIndex) => {
+              if (!confirm(`Reset chapter ${stem}?\n\nThis deletes the cached chunks + final WAV. Status flips to pending; click Render selected to re-synth.`)) {
+                return
+              }
+              try {
+                await resetChapter(slug, stem)
+                await refreshChapters()
+                if (renderableIndex != null) {
+                  setSelectedIndices(new Set([renderableIndex]))
+                }
+              } catch (e) {
+                alert(`Reset failed: ${e}`)
               }
             }}
           />
@@ -1085,6 +1100,7 @@ function ChaptersListCard({
   setSelectedIndices,
   onRefresh,
   onToggleSkip,
+  onResetChapter,
 }: {
   slug: string
   chapters: ChaptersResponse | null
@@ -1092,6 +1108,7 @@ function ChaptersListCard({
   setSelectedIndices: (s: Set<number>) => void
   onRefresh: () => void
   onToggleSkip: (blockIndex: number, becomeSkipped: boolean) => void | Promise<void>
+  onResetChapter: (stem: string, renderableIndex: number | null) => void | Promise<void>
 }) {
   if (!chapters) {
     return (
@@ -1189,6 +1206,9 @@ function ChaptersListCard({
                   onToggleSkip={() =>
                     onToggleSkip(c.block_index, c.status !== 'skipped')
                   }
+                  onResetChapter={() =>
+                    c.stem && onResetChapter(c.stem, c.renderable_index)
+                  }
                 />
               ))}
             </tbody>
@@ -1204,11 +1224,13 @@ function ChapterRow({
   selected,
   onToggle,
   onToggleSkip,
+  onResetChapter,
 }: {
   chapter: Chapter
   selected: boolean
   onToggle: () => void
   onToggleSkip: () => void
+  onResetChapter: () => void
 }) {
   const isSkipped = chapter.status === 'skipped'
   return (
@@ -1249,9 +1271,20 @@ function ChapterRow({
           />
         )}
       </td>
-      <td className="px-3 py-2 align-top w-32 text-right">
-        <div className="flex items-center justify-end gap-2">
+      <td className="px-3 py-2 align-top w-40 text-right">
+        <div className="flex items-center justify-end gap-1">
           <ChapterStatusBadge status={chapter.status} />
+          {chapter.status === 'rendered' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={onResetChapter}
+              title="Reset cache — wipes chunks/final.wav so next render re-synthesizes from scratch"
+            >
+              <RotateCw className="h-3 w-3" />
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"
