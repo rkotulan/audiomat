@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from audiomat.headers import prepare_for_tts
+from audiomat.num2text import normalize_lang
 from audiomat.project import RenderParams
 from audiomat.voice import Voice
 
@@ -135,13 +136,17 @@ class OmniVoiceTTS:
             raise ValueError(f"voice has missing files: {voice.dir}")
 
         self.load()
-        clean = prepare_for_tts(text, lang=language)
+        # OmniVoice and num2words both want ISO 639-1 ("cs"); EPUB metadata
+        # routinely supplies BCP 47 ("cs-CZ") which OmniVoice silently falls
+        # back to language-agnostic mode on. Normalize at the entrance.
+        lang = normalize_lang(language)
+        clean = prepare_for_tts(text, lang=lang)
         ref_text = voice.transcript()
 
         t0 = time.time()
         audios = self._model.generate(
             text=clean,
-            language=language,
+            language=lang,
             ref_text=ref_text,
             ref_audio=str(voice.wav_path),
             num_step=params.num_step,
