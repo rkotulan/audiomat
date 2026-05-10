@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Trash2, Play } from 'lucide-react'
+import { Plus, Trash2, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -81,15 +81,20 @@ export function Voices() {
                   <span className="font-mono text-right">{formatDate(v.created)}</span>
                 </div>
                 {v.notes && <p className="text-xs italic">{v.notes}</p>}
+                <audio
+                  controls
+                  src={voiceAudioUrl(v.name_slug)}
+                  preload="metadata"
+                  className="w-full h-9"
+                />
                 <div className="flex gap-2">
                   <Button size="sm" variant="outline" asChild>
                     <a
                       href={voiceAudioUrl(v.name_slug)}
-                      target="_blank"
-                      rel="noreferrer"
+                      download={`${v.name_slug}.wav`}
                     >
-                      <Play className="h-3 w-3" />
-                      Preview
+                      <Download className="h-3 w-3" />
+                      Download
                     </a>
                   </Button>
                   <Button

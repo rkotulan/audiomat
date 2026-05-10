@@ -314,10 +314,14 @@ def delete_voice(slug: str):
 
 @app.get("/api/voices/{slug}/audio")
 def voice_audio(slug: str):
+    """Serve voice.wav inline so the UI's <audio controls> can play it.
+    No filename= → no Content-Disposition: attachment → browser plays
+    instead of downloading. The frontend uses <a download> on a separate
+    button to force download."""
     target = PATHS.voice_dir(slug) / "voice.wav"
     if not target.exists():
         raise HTTPException(404, "voice.wav not found")
-    return FileResponse(target, media_type="audio/wav", filename=f"{slug}.wav")
+    return FileResponse(target, media_type="audio/wav")
 
 
 # ----------------------------------------------------------------------------
