@@ -50,8 +50,10 @@ import {
   startRender,
   subscribeProgress,
   updateBlocksSkipped,
+  updateProjectBook,
   updateProjectParams,
 } from '@/lib/api'
+import { LANGUAGE_OPTIONS, isValidLanguageCode } from '@/lib/languages'
 import type {
   Chapter,
   ChaptersResponse,
@@ -633,6 +635,7 @@ export function ProjectDetail() {
 
         <TabsContent value="advanced" className="space-y-4 pt-4">
           <OutputParamsCard project={project} slug={slug} onSaved={refresh} />
+          <BookMetadataCard project={project} slug={slug} onSaved={refresh} />
           <Card>
             <CardHeader>
               <CardTitle className="text-destructive">Danger zone</CardTitle>
@@ -1206,6 +1209,118 @@ function OutputParamsCard({
               Reset
             </Button>
             <Button onClick={onSave} disabled={!dirty || saving}>
+              <Save className="h-4 w-4" />
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ----------------------------------------------------------------------------
+// BookMetadataCard — currently exposes the language tag only. Used to
+// override mis-detected EPUB metadata or correct a TXT project that was
+// created with the wrong default. Mounted in the Advanced tab.
+// ----------------------------------------------------------------------------
+
+function BookMetadataCard({
+  project,
+  slug,
+  onSaved,
+}: {
+  project: Project
+  slug: string
+  onSaved: () => void
+}) {
+  const initial = project.book.language || 'cs'
+  const isPreset = LANGUAGE_OPTIONS.some((o) => o.code === initial)
+  const [selected, setSelected] = useState<string>(isPreset ? initial : 'other')
+  const [custom, setCustom] = useState<string>(isPreset ? '' : initial)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  const effective =
+    selected === 'other' ? custom.trim().toLowerCase() : selected
+  const isValid = isValidLanguageCode(effective)
+  const dirty = effective !== initial
+
+  const onSave = async () => {
+    if (!isValid) return
+    setSaving(true)
+    setMsg('')
+    try {
+      await updateProjectBook(slug, { language: effective })
+      setMsg('Saved.')
+      onSaved()
+    } catch (e) {
+      setMsg(`Failed: ${e}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const onReset = () => {
+    setSelected(isPreset ? initial : 'other')
+    setCustom(isPreset ? '' : initial)
+    setMsg('')
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Book metadata</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Override the language tag stored with this project. EPUB DC
+          metadata is auto-detected on import; edit here if it was missing
+          or wrong (e.g. an English book mis-tagged as <code>en-GB</code>{' '}
+          when you want <code>en</code>). Affects number-to-text expansion
+          (cs: <code>1959</code> → <code>tisíc devět set padesát devět</code>)
+          and the language passed to OmniVoice.
+        </p>
+
+        <div className="space-y-2">
+          <Label htmlFor="adv-lang">Language</Label>
+          <select
+            id="adv-lang"
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+          >
+            {LANGUAGE_OPTIONS.map((opt) => (
+              <option key={opt.code} value={opt.code}>
+                {opt.label}
+              </option>
+            ))}
+            <option value="other">Other (custom code)…</option>
+          </select>
+          {selected === 'other' && (
+            <Input
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              placeholder="ISO 639-1 / BCP 47 (e.g. ja, ko, pt-BR)"
+            />
+          )}
+          <p className="text-xs text-muted-foreground">
+            Current: <code className="font-mono">{initial}</code>
+          </p>
+          {!isValid && (
+            <p className="text-xs text-destructive">
+              Invalid code — use ISO 639-1 (cs, en) or BCP 47 (cs-CZ, pt-BR).
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between pt-2">
+          <span className="text-xs text-muted-foreground">{msg}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onReset} disabled={!dirty}>
+              Reset
+            </Button>
+            <Button onClick={onSave} disabled={!dirty || !isValid || saving}>
               <Save className="h-4 w-4" />
               {saving ? 'Saving…' : 'Save'}
             </Button>

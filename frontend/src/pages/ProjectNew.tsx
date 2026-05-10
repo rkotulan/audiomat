@@ -6,23 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { createProject, listVoices } from '@/lib/api'
+import { LANGUAGE_OPTIONS, isValidLanguageCode } from '@/lib/languages'
 import type { Voice } from '@/lib/types'
-
-// Common audiobook languages. ISO 639-1 codes map directly to OmniVoice's
-// supported set (646 languages — but listing them all in a dropdown is
-// noise). Pick the top 10 + Other so most users hit it first try.
-const LANGUAGE_OPTIONS: Array<{ code: string; label: string }> = [
-  { code: 'cs', label: 'Čeština (cs)' },
-  { code: 'sk', label: 'Slovenčina (sk)' },
-  { code: 'en', label: 'English (en)' },
-  { code: 'de', label: 'Deutsch (de)' },
-  { code: 'pl', label: 'Polski (pl)' },
-  { code: 'fr', label: 'Français (fr)' },
-  { code: 'es', label: 'Español (es)' },
-  { code: 'it', label: 'Italiano (it)' },
-  { code: 'ru', label: 'Русский (ru)' },
-  { code: 'uk', label: 'Українська (uk)' },
-]
 
 export function ProjectNew() {
   const nav = useNavigate()
@@ -60,7 +45,7 @@ export function ProjectNew() {
   const isTxt = book?.name.toLowerCase().endsWith('.txt') ?? false
   const effectiveLanguage =
     language === 'other' ? customLanguage.trim().toLowerCase() : language
-  const txtLangValid = !isTxt || /^[a-z]{2,3}(-[a-zA-Z]{2,4})?$/.test(effectiveLanguage)
+  const txtLangValid = !isTxt || isValidLanguageCode(effectiveLanguage)
 
   const canSubmit =
     name.trim() && voiceRef.trim() && book && txtLangValid && !busy

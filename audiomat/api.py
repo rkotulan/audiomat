@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -586,6 +587,43 @@ def update_project_params(slug: str, params: dict):
     current.update(params)
     proj.params = RenderParams(**{k: current.get(k) for k in current
                                    if k in RenderParams.__dataclass_fields__})
+    proj.save()
+    return ProjectOut.from_project(proj)
+
+
+# Lowercase primary subtag (2–3 letters) optionally followed by a region
+# / script suffix (cs-CZ, pt-BR, zh-Hant). Mirrors the frontend regex.
+_LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-zA-Z]{2,4})?$")
+
+
+class BookMetaRequest(BaseModel):
+    language: str | None = None
+
+
+@app.patch("/api/projects/{slug}/book", response_model=ProjectOut)
+def update_project_book(slug: str, req: BookMetaRequest):
+    """Patch the project's stored book metadata. Currently only
+    ``language`` — used to override mis-detected EPUB DC metadata or
+    correct a TXT project that was created with the wrong default.
+
+    Note: changing the language doesn't invalidate the manifest cache
+    (which hashes only chunk text), so already-rendered chapters stay
+    on disk. Re-render per chapter to pick up the new language for
+    number-to-text expansion (``1959`` → ``tisíc devět set padesát
+    devět`` for cs).
+    """
+    proj = _load_project_or_404(slug)
+    if req.language is not None:
+        norm = req.language.strip()
+        if not norm:
+            raise HTTPException(400, "language cannot be empty")
+        if not _LANG_RE.fullmatch(norm):
+            raise HTTPException(
+                400,
+                f"invalid language code {norm!r}: use ISO 639-1 (cs, en) "
+                f"or BCP 47 (cs-CZ, pt-BR)",
+            )
+        proj.book.language = norm
     proj.save()
     return ProjectOut.from_project(proj)
 
