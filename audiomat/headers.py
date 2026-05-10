@@ -112,11 +112,16 @@ _MARKER_RE = re.compile(r"\[(?:break|pause|emphasis|laughing)\]")
 def strip_markers(text: str) -> str:
     """Replace ``[break]``/``[pause]``/``[emphasis]``/``[laughing]`` markers
     with ``". "`` (sentence-end cue), then collapse whitespace and any
-    resulting double-period sequences. OmniVoice / Chatterbox / XTTS-v2 all
-    take the resulting text well.
+    resulting double-period or floating-period sequences. OmniVoice /
+    Chatterbox / XTTS-v2 all take the resulting text well.
     """
     out = _MARKER_RE.sub(". ", text)
     out = re.sub(r"\s+", " ", out)
+    # When a marker was preceded by whitespace (e.g. an HTML newline
+    # between a heading and the next paragraph), the substitution leaves
+    # " . " — drop the leading space so the model sees "word." not
+    # "word .". Real prose never has " ." so this is unambiguous.
+    out = re.sub(r"\s+\.", ".", out)
     out = re.sub(r"\.\s*\.", ".", out)
     return out.strip()
 

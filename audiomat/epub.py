@@ -93,12 +93,24 @@ def split_sentences(text: str) -> list[str]:
 def _extract_text(html_bytes: bytes) -> str:
     """Pull readable text out of an XHTML spine item, dropping script / style
     and preserving paragraph-level whitespace.
+
+    Heading tags (``h1``…``h6``) get a ``[pause][break]`` marker appended
+    so the downstream pipeline treats them as section headers and the TTS
+    model breathes between the chapter title and the body sentence.
+    Without this, "Šedá dívka Rezavý les je prastarý…" came out glued —
+    the section header and first paragraph were textually adjacent in
+    extracted plain text.
     """
-    from bs4 import BeautifulSoup
+    from bs4 import BeautifulSoup, NavigableString
 
     soup = BeautifulSoup(html_bytes, "lxml")
     for tag in soup(("script", "style", "noscript")):
         tag.decompose()
+    # Append a marker to every heading. headers.strip_markers() will
+    # translate this into a sentence-end cue (". ") before the model
+    # sees the text.
+    for h in soup.find_all(("h1", "h2", "h3", "h4", "h5", "h6")):
+        h.append(NavigableString("[pause][break]"))
     # Replace block-level tags with newlines so paragraph breaks survive
     # ``get_text``. Inline tags (em / strong / a) are kept as plain text.
     for br in soup.find_all("br"):
