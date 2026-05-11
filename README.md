@@ -4,7 +4,8 @@ Convert eBooks into audiobooks with cloned voices, locally and offline.
 
 > "Vlož knihu, vypadne audiokniha." — feed in a book, get an audiobook out.
 
-**Status:** pre-alpha, active scaffolding. Not usable yet.
+**Status:** alpha — full pipeline working end-to-end, actively used for
+personal Czech audiobook conversion. Public release pending.
 
 ## What audiomat is
 
@@ -30,8 +31,9 @@ There are several solid open-source audiobook generators (epub2tts,
 audiobook_maker, abogen, chatterbox-Audiobook, …). audiomat differs:
 
 - **One TTS engine, not a selector.** OmniVoice fixed. Less surface, fewer bugs.
-- **Czech-first.** Section-header pause injection, time-marker handling, 35 s
-  reference voice clip workflow validated on a real 13:46 audiobook render.
+- **Czech-first.** Section-header pause injection, time-marker handling, 5–10 s
+  reference voice clip workflow (OmniVoice native window), pipeline validated
+  end-to-end on full Czech audiobook renders.
 - **Project-shaped UX.** Named projects (not session UUIDs), shared voice
   library re-usable across books, parameter-sweep preview matrix.
 - **Premium defaults.** `num_step=48`, `guidance_scale=2.0` baked in —
