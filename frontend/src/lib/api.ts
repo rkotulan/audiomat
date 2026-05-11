@@ -1,6 +1,7 @@
 // Tiny fetch wrapper for the audiomat FastAPI backend.
 // Vite proxies /api → :8000 in dev, so we can use relative paths everywhere.
 import type {
+  ChapterText,
   ChaptersResponse,
   CustomPreviewResult,
   DraftUploadResult,
@@ -224,6 +225,29 @@ export const resetAllChapters = (slug: string) =>
   fetch(`${BASE}/projects/${slug}/chapters`, { method: 'DELETE' }).then(
     ok<{ reset_count: number }>,
   )
+
+// ---- per-chapter text override ----
+
+export const getChapterText = (slug: string, stem: string): Promise<ChapterText> =>
+  fetch(
+    `${BASE}/projects/${slug}/chapters/${encodeURIComponent(stem)}/text`,
+  ).then(ok<ChapterText>)
+
+export const saveChapterText = (
+  slug: string,
+  stem: string,
+  text: string,
+): Promise<ChapterText> =>
+  fetch(`${BASE}/projects/${slug}/chapters/${encodeURIComponent(stem)}/text`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  }).then(ok<ChapterText>)
+
+export const resetChapterText = (slug: string, stem: string): Promise<ChapterText> =>
+  fetch(`${BASE}/projects/${slug}/chapters/${encodeURIComponent(stem)}/text`, {
+    method: 'DELETE',
+  }).then(ok<ChapterText>)
 
 export const startRender = (slug: string, indices?: number[]) =>
   fetch(`${BASE}/projects/${slug}/render`, {

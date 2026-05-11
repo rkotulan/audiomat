@@ -16,12 +16,14 @@ import {
   Ban,
   Undo2,
   Square,
+  Pencil,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
+import { ChapterTextEditor } from '@/components/ChapterTextEditor'
 import { InlineModelProgress } from '@/components/InlineModelProgress'
 import { InlineProgressCard } from '@/components/InlineProgressCard'
 import { Slider } from '@/components/ui/slider'
@@ -77,6 +79,9 @@ export function ProjectDetail() {
   const [chapters, setChapters] = useState<ChaptersResponse | null>(null)
   const [m4bPercent, setM4bPercent] = useState<number | null>(null)
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
+  // Stem of the chapter currently open in the text editor modal, or null
+  // when the modal is closed.
+  const [editingStem, setEditingStem] = useState<string | null>(null)
   const unsubRef = useRef<(() => void) | null>(null)
   const { confirm, dialog: confirmDialog } = useConfirm()
 
@@ -332,6 +337,17 @@ export function ProjectDetail() {
   return (
     <div className="space-y-6">
       {confirmDialog}
+      <ChapterTextEditor
+        open={editingStem != null}
+        slug={slug}
+        stem={editingStem}
+        onClose={() => setEditingStem(null)}
+        onSaved={() => {
+          // Refresh the chapter list so has_override + status update.
+          refreshChapters()
+        }}
+      />
+
       <div>
         <Button variant="ghost" onClick={() => nav('/projects')} className="-ml-3">
           <ArrowLeft className="h-4 w-4" />
@@ -592,6 +608,7 @@ export function ProjectDetail() {
                 },
               })
             }}
+            onEditChapter={(stem) => setEditingStem(stem)}
           />
         </TabsContent>
 
@@ -1477,6 +1494,7 @@ function ChaptersListCard({
   onRefresh,
   onToggleSkip,
   onResetChapter,
+  onEditChapter,
 }: {
   slug: string
   chapters: ChaptersResponse | null
@@ -1485,6 +1503,7 @@ function ChaptersListCard({
   onRefresh: () => void
   onToggleSkip: (blockIndex: number, becomeSkipped: boolean) => void | Promise<void>
   onResetChapter: (stem: string, renderableIndex: number | null) => void | Promise<void>
+  onEditChapter: (stem: string) => void
 }) {
   if (!chapters) {
     return (
@@ -1585,6 +1604,7 @@ function ChaptersListCard({
                   onResetChapter={() =>
                     c.stem && onResetChapter(c.stem, c.renderable_index)
                   }
+                  onEditChapter={() => c.stem && onEditChapter(c.stem)}
                 />
               ))}
             </tbody>
@@ -1601,12 +1621,14 @@ function ChapterRow({
   onToggle,
   onToggleSkip,
   onResetChapter,
+  onEditChapter,
 }: {
   chapter: Chapter
   selected: boolean
   onToggle: () => void
   onToggleSkip: () => void
   onResetChapter: () => void
+  onEditChapter: () => void
 }) {
   const isSkipped = chapter.status === 'skipped'
   return (
@@ -1624,8 +1646,17 @@ function ChapterRow({
       <td className="px-3 py-2 align-top">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-mono text-muted-foreground truncate">
-              {chapter.stem ?? '— skipped —'}
+            <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground truncate">
+              <span className="truncate">{chapter.stem ?? '— skipped —'}</span>
+              {chapter.has_override && (
+                <Badge
+                  variant="outline"
+                  className="font-normal text-[10px] py-0 h-4 border-amber-500/50 text-amber-600 shrink-0"
+                  title="This chapter's text has been edited — render uses override, not the EPUB original"
+                >
+                  edited
+                </Badge>
+              )}
             </div>
             <div className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
               {chapter.preview || <em className="italic">empty</em>}
@@ -1650,6 +1681,17 @@ function ChapterRow({
       <td className="px-3 py-2 align-top w-40 text-right">
         <div className="flex items-center justify-end gap-1">
           <ChapterStatusBadge status={chapter.status} />
+          {!isSkipped && chapter.stem && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              onClick={onEditChapter}
+              title="Edit chapter text — typo fix, manual pauses, pronunciation tweak"
+            >
+              <Pencil className="h-3 w-3" />
+            </Button>
+          )}
           {chapter.status === 'rendered' && (
             <Button
               size="sm"

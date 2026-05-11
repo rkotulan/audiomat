@@ -116,6 +116,26 @@ export interface Chapter {
   status: ChapterStatus
   audio_url: string | null
   duration_s: number | null
+  has_override: boolean             // true when this chapter has a per-block text override
+}
+
+export interface ChapterAutoPause {
+  header: string
+  type: 'time_marker' | 'section_header' | 'unknown'
+}
+
+export interface ChapterText {
+  stem: string
+  block_index: number
+  renderable_index: number
+  text: string                      // current text (override if present, else EPUB original)
+  original_text: string             // EPUB original text — never changes
+  has_override: boolean
+  char_count: number
+  estimated_chunks: number
+  min_chars: number
+  max_chars: number
+  auto_pause: ChapterAutoPause | null
 }
 
 export interface ChaptersResponse {
