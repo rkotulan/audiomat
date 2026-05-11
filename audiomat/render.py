@@ -13,6 +13,7 @@ as work progresses. The FastAPI layer maps these events into an SSE stream.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -73,8 +74,20 @@ def _manifest_path(chap_dir: Path) -> Path:
     return chap_dir / "manifest.json"
 
 
-def _load_manifest(chap_dir: Path) -> dict[str, str]:
-    """Read manifest.json. Returns empty dict on missing / corrupt file."""
+def _load_manifest(chap_dir: Path) -> dict[str, dict]:
+    """Read manifest.json. Returns empty dict on missing / corrupt file.
+
+    Schema: ``{wav_name: {"text": str, "sig": str}}``. The ``sig`` field
+    is a 16-char hex digest of every render param that affects audio
+    output (voice slug + voice WAV mtime + num_step + guidance_scale +
+    speed + language) so a voice / params change invalidates the cache
+    instead of silently returning stale audio (CLAUDE.md gotcha fix).
+
+    Backward compat: pre-fix manifests were ``{wav_name: text_string}``.
+    Older entries are kept as-is in the dict; the cache check below
+    treats any non-dict value as a cache miss and re-synthesizes —
+    safer than guessing what the original sig would have been.
+    """
     p = _manifest_path(chap_dir)
     if not p.exists():
         return {}
@@ -84,7 +97,7 @@ def _load_manifest(chap_dir: Path) -> dict[str, str]:
         return {}
 
 
-def _save_manifest(chap_dir: Path, manifest: dict[str, str]) -> None:
+def _save_manifest(chap_dir: Path, manifest: dict[str, dict]) -> None:
     """Write manifest.json atomically (write to .tmp, then rename)."""
     p = _manifest_path(chap_dir)
     tmp = p.with_suffix(".json.tmp")
@@ -123,6 +136,37 @@ class ProjectRenderer:
         self.blocks = blocks
         self.chunks_root = project.chunks_dir
         self.chunks_root.mkdir(parents=True, exist_ok=True)
+
+    # -- cache key --
+
+    def _params_signature(self) -> str:
+        """Stable hash of every render input that affects audio output but
+        is NOT the chunk text itself. Stored alongside each cached chunk
+        so a voice swap or num_step change invalidates instead of silently
+        returning stale audio.
+
+        Inputs:
+          * voice slug (renaming a voice file should not invalidate, but
+            picking a different voice should — slug captures both)
+          * voice WAV mtime (re-recorded voice with same slug → invalidate)
+          * num_step, guidance_scale, speed (OmniVoice generation knobs)
+          * language (changes num2words expansion of digits)
+
+        16 hex chars (~64 bits) is plenty — collisions across the small
+        config space we actually use are astronomically unlikely.
+        """
+        try:
+            voice_mtime = int(self.voice.wav_path.stat().st_mtime)
+        except OSError:
+            voice_mtime = 0
+        p = self.project.params
+        lang = self.project.book.language or "cs"
+        src = (
+            f"{self.voice.name_slug}|{voice_mtime}"
+            f"|{p.num_step}|{p.guidance_scale}|{p.speed}"
+            f"|{lang}"
+        )
+        return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
 
     # -- per-chapter --
 
@@ -163,6 +207,7 @@ class ProjectRenderer:
         chunk_texts = self._chunk_text_for(block)
         chunk_total = len(chunk_texts)
         manifest = _load_manifest(chap_dir)
+        sig = self._params_signature()
 
         # Skip the whole chapter if the final WAV already exists AND all
         # chunks are cached. Otherwise we re-concat at the end.
@@ -172,11 +217,18 @@ class ProjectRenderer:
         for j, text in enumerate(chunk_texts):
             wav_name = f"chunk_{j:04d}.wav"
             wav_path = chunks_dir / wav_name
-            cached_text = manifest.get(wav_name)
-            text_unchanged = (cached_text == text)
+            entry = manifest.get(wav_name)
+            # New schema: {text, sig}. Old schema: bare text string —
+            # treated as a miss so the voice/params change that triggered
+            # the schema upgrade actually re-renders.
+            if isinstance(entry, dict):
+                text_unchanged = (entry.get("text") == text)
+                sig_unchanged = (entry.get("sig") == sig)
+            else:
+                text_unchanged = sig_unchanged = False
             wav_present = wav_path.exists() and wav_path.stat().st_size > 1024
 
-            if wav_present and text_unchanged:
+            if wav_present and text_unchanged and sig_unchanged:
                 chunk_paths.append(wav_path)
                 yield ProgressEvent(
                     kind="chunk_cached",
@@ -221,8 +273,10 @@ class ProjectRenderer:
                 result.sample_rate,
                 subtype="PCM_16",
             )
-            # Persist manifest AFTER each chunk — crash-safe.
-            manifest[wav_name] = text
+            # Persist manifest AFTER each chunk — crash-safe. Schema is
+            # {text, sig}; sig captures voice + params so a later run
+            # with different settings invalidates this entry.
+            manifest[wav_name] = {"text": text, "sig": sig}
             _save_manifest(chap_dir, manifest)
             chunk_paths.append(wav_path)
 

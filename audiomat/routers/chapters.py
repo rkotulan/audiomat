@@ -124,10 +124,14 @@ def reset_chapter(slug: str, stem: str):
 
     Use cases:
       * Roll the diffusion dice again on a glitchy chapter (same text,
-        different sample).
-      * Force re-render after a voice or params change (the manifest
-        hash currently keys only on text — voice / num_step / gs / speed
-        changes don't auto-invalidate, this is a known v0.0.x limitation).
+        params, and voice — different sample of the noise schedule).
+      * Force a fresh render even when the params signature hasn't
+        changed.
+
+    Note: voice / num_step / guidance_scale / speed / language changes
+    auto-invalidate via the manifest's ``sig`` field, so this endpoint is
+    NOT required after a params change — just hit Render and the stale
+    chunks re-synth on their own.
 
     The chapters list endpoint sees status flip to ``pending`` on the
     next call. Caller is responsible for triggering a render afterwards.

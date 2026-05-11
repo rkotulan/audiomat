@@ -143,12 +143,13 @@ Example bug: `GET /voices/draft-audio` registered AFTER
 pattern, place them ABOVE the wildcard in source order. (See commit
 `beb4431`.)
 
-### Manifest cache hashes only chunk TEXT, not voice/params
-Changing `voice_ref`, `num_step`, `guidance_scale`, or `speed` on
-already-rendered chapters produces NO cache invalidation — next render
-returns stale audio. **Workaround**: per-row Re-render button wipes
-`chunks/<stem>/`. **Future fix**: include voice slug + params signature
-in the cache key.
+### Manifest cache schema is `{wav_name: {text, sig}}`
+Per-chunk manifest stores both the source text **and** a 16-char
+signature of voice slug + voice WAV mtime + num_step + guidance_scale +
+speed + language. Voice or params change → sig mismatch → automatic
+re-synth on next render. **Don't** assume bare-string entries exist;
+that was the pre-fix schema and the loader treats it as a cache miss.
+See `ProjectRenderer._params_signature()` in `audiomat/render.py`.
 
 ### EPUB DRM watermarks (Palmknihy, copyright/imprint)
 First user upload of Rezavý les rendered the Palmknihy notice as
@@ -237,11 +238,20 @@ GPU + recent driver required.
 
 ## Testing pattern
 
-No automated tests yet (only per-module `__main__` smoke tests +
-FastAPI TestClient one-off checks). User tests by **manually clicking
-through the actual flow in the browser + screenshots when something is
-off**. When user reports a bug, ask for a screenshot if not provided;
-otherwise trust description and trace the user flow before guessing.
+Pytest suite under `tests/` covers the pure modules (chunker, num2text,
+slug, headers) + the render cache schema + a FastAPI TestClient smoke
+suite (route registration, draft-audio not shadowed by `/{slug}`,
+model-status doesn't trigger a model load). Run via `python -m pytest`
+(or `pytest`) — completes in <1 s on CPU, no GPU required.
+
+The TTS path itself is **not** covered (would need OmniVoice + CUDA).
+That gap is filled by **manually clicking through the actual flow in
+the browser + screenshots when something is off**. When user reports
+a bug there, ask for a screenshot if not provided; otherwise trust
+description and trace the user flow before guessing.
+
+Per-module `__main__` smoke tests still exist for quick `python -m
+audiomat.<module>` sanity checks during development.
 
 ## What NOT to do
 
@@ -256,9 +266,10 @@ otherwise trust description and trace the user flow before guessing.
 - **Don't regenerate** `~/audiomat/voices/<slug>/voice.txt` files
   blindly with whisper-medium — CZ accuracy is poor (Egipský / zrsky /
   přez / podníky); user revises manually before save.
-- **Don't change `voice_ref` / `num_step` / `gs` / `speed`** and expect
-  manifest cache to invalidate — it doesn't. Use Re-render button per
-  row, or wipe `chunks/<stem>/` manually.
+- **Don't manually wipe `chunks/<stem>/` after a voice / params change**
+  — the manifest signature handles it now. Just hit Render and stale
+  chunks re-synth automatically. Per-row Re-render is for getting a
+  different sample of the noise schedule (same params).
 - **Don't bump OmniVoice ref length above ~10 s** — past 20 s the model
   warns every call AND is 2.6× slower per chunk.
 - **Don't use OmniVoice with mismatched `ref_audio` and `ref_text`
