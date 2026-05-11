@@ -151,14 +151,21 @@ def load_project_or_404(slug: str) -> Project:
 
 def book_blocks(proj: Project) -> list[Block]:
     """Parse the project's book file into a Block list. EPUB goes through
-    parse_epub; TXT is wrapped into a single Block. Shared by /chapters,
-    /preview, and /render — all of which need the same parse semantics.
+    parse_epub; TXT is wrapped into a single Block. Per-chapter text
+    overrides (see :mod:`audiomat.overrides`) are merged in transparently
+    so downstream code (renderer / chunker / preview) sees one source of
+    truth. Shared by /chapters, /preview, and /render — all of which need
+    the same parse semantics.
     """
     if proj.book.filename.endswith(".epub"):
         _meta, blocks = parse_epub(proj.book_path)
-        return blocks
-    text = proj.book_path.read_text(encoding="utf-8")
-    return [Block(text=text, sentences=split_sentences(text))]
+    else:
+        text = proj.book_path.read_text(encoding="utf-8")
+        blocks = [Block(text=text, sentences=split_sentences(text))]
+    # Local import to dodge a state→overrides→state cycle (overrides
+    # only depends on epub, not on state).
+    from audiomat.overrides import apply_overrides
+    return apply_overrides(blocks, proj.dir)
 
 
 def wav_duration_s(path: Path) -> float:
