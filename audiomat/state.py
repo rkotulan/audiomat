@@ -44,50 +44,151 @@ PATHS = AudiomatPaths.default()
 
 
 # ----------------------------------------------------------------------------
-# TTS singleton
+# TTS instance registry (multi-model, LRU-evicted)
 # ----------------------------------------------------------------------------
 
-_TTS: OmniVoiceTTS | None = None
+# Up to MAX_LOADED OmniVoiceTTS instances can sit in VRAM simultaneously
+# — one per "target" (an HF model id like "k2-fsa/OmniVoice" or a local
+# checkpoint path like "/data/models/jezkova-v1"). When a load would push
+# past the cap, the least-recently-used instance is unloaded first. The
+# 12 GB RTX 5070 fits ~2 OmniVoice models comfortably; bump via
+# AUDIOMAT_MAX_LOADED_MODELS if you have more headroom.
+MAX_LOADED_MODELS = int(os.environ.get("AUDIOMAT_MAX_LOADED_MODELS", "2"))
+
+# Key = normalized target (resolved absolute path for local dirs; raw HF
+# id otherwise). Multiple voices that point at the same target share the
+# same OmniVoiceTTS handle.
+_TTS_INSTANCES: dict[str, OmniVoiceTTS] = {}
 _TTS_LOCK = threading.Lock()
 
 
-def get_tts() -> OmniVoiceTTS:
-    """Return the singleton TTS instance (lazy init under a lock).
+def _normalize_target(target: str) -> str:
+    """Make the dict key stable: resolved-absolute for filesystem paths,
+    verbatim for HF ids. Lets ``./models/x`` and ``/abs/models/x`` share
+    one instance and prevents two HF ids that differ only by case from
+    overlapping."""
+    try:
+        p = Path(target)
+        if p.exists():
+            return str(p.resolve())
+    except (OSError, ValueError):
+        pass
+    return target
 
-    The lock prevents two concurrent first-render requests from each
-    constructing their own OmniVoiceTTS — a TOCTOU race that would
-    duplicate the HF download and waste GPU memory.
+
+def _evict_lru_locked() -> None:
+    """Caller MUST hold _TTS_LOCK. Picks the instance with the largest
+    seconds_since_last_used and unloads it. Never-used instances (no
+    load() / generate() yet) get evicted first since they cost nothing
+    to lose."""
+    if not _TTS_INSTANCES:
+        return
+
+    def _age(inst: OmniVoiceTTS) -> float:
+        secs = inst.seconds_since_last_used()
+        # None → infinitely stale, top of the eviction queue
+        return float("inf") if secs is None else secs
+
+    lru_key = max(_TTS_INSTANCES, key=lambda k: _age(_TTS_INSTANCES[k]))
+    _TTS_INSTANCES[lru_key].unload()
+    del _TTS_INSTANCES[lru_key]
+
+
+def get_tts(target: str | None = None, revision: str | None = None) -> OmniVoiceTTS:
+    """Return (or create) the TTS instance for ``target``.
+
+    * ``target=None`` → stock OmniVoice (DEFAULT_MODEL_ID + DEFAULT_REVISION
+      from tts.py). Backwards-compatible with existing single-singleton
+      callers.
+    * ``target=<hf_id>`` → that HF model. ``revision`` pinned if given.
+    * ``target=<local_path>`` → that on-disk checkpoint. ``revision`` is
+      meaningless for local snapshots (always None passed to
+      from_pretrained).
+
+    Lazy: instantiation is cheap (no model load yet); the actual weight
+    load fires on first ``generate()`` call inside the instance.
     """
-    global _TTS
-    if _TTS is None:
-        with _TTS_LOCK:
-            if _TTS is None:
-                _TTS = OmniVoiceTTS()
-    return _TTS
+    # Resolve None → stock default with its pinned revision.
+    if target is None:
+        from audiomat.tts import DEFAULT_MODEL_ID, DEFAULT_REVISION
+        target = DEFAULT_MODEL_ID
+        if revision is None:
+            revision = DEFAULT_REVISION
+
+    key = _normalize_target(target)
+    with _TTS_LOCK:
+        inst = _TTS_INSTANCES.get(key)
+        if inst is not None:
+            return inst
+        # New target → evict LRU if at capacity, then instantiate.
+        while len(_TTS_INSTANCES) >= MAX_LOADED_MODELS:
+            _evict_lru_locked()
+        inst = OmniVoiceTTS(model_id=target, model_revision=revision)
+        _TTS_INSTANCES[key] = inst
+        return inst
 
 
-def peek_tts() -> OmniVoiceTTS | None:
-    """Return the TTS singleton without instantiating it. Used by the
-    /system/model-status endpoint, which must not trigger a model load."""
-    return _TTS
+def peek_tts(target: str | None = None) -> OmniVoiceTTS | None:
+    """Return an existing instance without instantiating one.
+
+    * ``target=None`` → the most-recently-used instance (or the one
+      currently loading, if any). Used by /system/model-status so the
+      UI can show progress for whatever is happening right now.
+    * ``target=<value>`` → that specific instance, or None.
+
+    Never triggers a load.
+    """
+    if target is not None:
+        return _TTS_INSTANCES.get(_normalize_target(target))
+    if not _TTS_INSTANCES:
+        return None
+    # Loading > MRU > anything. UI cares most about "what's loading right now".
+    loading = [i for i in _TTS_INSTANCES.values() if i.is_loading]
+    if loading:
+        return loading[0]
+    # MRU = smallest seconds_since_last_used. None means "never used" →
+    # park behind any used instance.
+    return min(
+        _TTS_INSTANCES.values(),
+        key=lambda i: i.seconds_since_last_used() if i.seconds_since_last_used() is not None else float("inf"),
+    )
 
 
-def clear_tts() -> None:
-    """Drop the TTS singleton (and its model). Idempotent. Used by the
-    lifespan shutdown hook + the idle-unload background task."""
-    global _TTS
-    if _TTS is not None:
-        _TTS.unload()
-        _TTS = None
+def peek_all_tts() -> list[OmniVoiceTTS]:
+    """Snapshot of all currently-registered TTS instances. Used by the
+    idle-unload loop + admin endpoints. Caller must not mutate the list."""
+    return list(_TTS_INSTANCES.values())
+
+
+def clear_tts(target: str | None = None) -> None:
+    """Unload one or all instances.
+
+    * ``target=None`` → unload everything (lifespan shutdown).
+    * ``target=<value>`` → unload that specific instance (manual evict).
+
+    Idempotent.
+    """
+    with _TTS_LOCK:
+        if target is None:
+            for inst in _TTS_INSTANCES.values():
+                inst.unload()
+            _TTS_INSTANCES.clear()
+            return
+        key = _normalize_target(target)
+        inst = _TTS_INSTANCES.pop(key, None)
+        if inst is not None:
+            inst.unload()
 
 
 async def idle_unload_loop(
     timeout_s: int = IDLE_TIMEOUT_S,
     interval_s: int = IDLE_CHECK_INTERVAL_S,
 ) -> None:
-    """Background task: every ``interval_s``, drop the TTS model from GPU
-    if it has been idle ``timeout_s`` seconds. Started by the FastAPI
-    lifespan; cancelled cleanly on shutdown.
+    """Background task: every ``interval_s``, unload any TTS instance
+    that has been idle for ``timeout_s`` seconds. Walks every entry in
+    the registry — each model is evaluated independently so a fresh
+    fine-tune doesn't get evicted just because the stock model went
+    cold.
 
     Skips unload while a render is in flight (any RENDER_THREADS entry
     is alive) — wouldn't be safe and would waste a reload anyway, since
@@ -102,14 +203,20 @@ async def idle_unload_loop(
             await asyncio.sleep(interval_s)
         except asyncio.CancelledError:
             return
-        tts = peek_tts()
-        if tts is None or not tts.is_loaded:
-            continue
         if any(t.is_alive() for t in RENDER_THREADS.values()):
             continue
-        idle = tts.seconds_since_last_used()
-        if idle is not None and idle >= timeout_s:
-            clear_tts()
+        # Snapshot the keys outside the lock — we hold the lock only for
+        # the actual unload, since OmniVoiceTTS.unload() can block on
+        # torch.cuda.empty_cache().
+        with _TTS_LOCK:
+            to_evict = [
+                key for key, inst in _TTS_INSTANCES.items()
+                if inst.is_loaded
+                and (inst.seconds_since_last_used() or 0) >= timeout_s
+            ]
+            for key in to_evict:
+                _TTS_INSTANCES[key].unload()
+                del _TTS_INSTANCES[key]
 
 
 # ----------------------------------------------------------------------------
