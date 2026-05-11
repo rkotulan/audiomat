@@ -29,6 +29,12 @@ Issues   = "https://github.com/rkotulan/audiomat/issues"
 # [project.scripts] — entry point added once audiomat/cli.py exists
 # audiomat = "audiomat.cli:main"
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",        # required by FastAPI TestClient
+]
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -36,3 +42,13 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["audiomat*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    # bs4 floods stderr with this when handed an XML EPUB chunk; suppressed
+    # at runtime in audiomat.epub via warnings.catch_warnings.
+    "ignore::bs4.XMLParsedAsHTMLWarning",
+]
