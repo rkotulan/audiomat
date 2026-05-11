@@ -517,9 +517,10 @@ export function ProjectDetail() {
                 <div className="flex items-center justify-between gap-3 pt-2 border-t border-dashed">
                   <p className="text-xs text-muted-foreground">
                     Wipes every cached chapter under <code>chunks/</code>.
-                    Use after voice / params / language changes — manifest
-                    hash keys only on chunk text, so otherwise stale audio
-                    sticks around.
+                    Use to roll fresh diffusion noise across the whole book,
+                    or to reclaim disk space after a render. Voice / params
+                    changes auto-invalidate via the manifest signature — no
+                    manual wipe needed for those.
                   </p>
                   <Button
                     variant="ghost"
@@ -672,6 +673,30 @@ export function ProjectDetail() {
               )}
             </CardContent>
           </Card>
+
+          {project.has_final_m4b && (chapters?.rendered_count ?? 0) > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Free chapter cache</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Your M4B is built. Wipe the per-chapter cache under{' '}
+                  <code>chunks/</code> to reclaim disk space — the M4B itself
+                  stays. If you change params or rebuild later, just hit
+                  Render again and the chapters re-synth automatically.
+                </p>
+                <Button
+                  variant="outline"
+                  onClick={onResetAllChapters}
+                  disabled={busy}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Free cache ({chapters?.rendered_count ?? 0} chapters)
+                </Button>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4 pt-4">
