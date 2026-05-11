@@ -25,17 +25,28 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import asyncio
+
 from audiomat.routers import chapters, preview, projects, render, system, voices
-from audiomat.state import PATHS, clear_tts
+from audiomat.state import PATHS, clear_tts, idle_unload_loop
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Set up runtime dirs on startup; tear down resources on shutdown."""
+    """Set up runtime dirs + idle-unload background task on startup;
+    tear down resources on shutdown."""
     PATHS.ensure_dirs()
-    yield
-    # On shutdown, drop the model to free GPU
-    clear_tts()
+    idle_task = asyncio.create_task(idle_unload_loop(), name="audiomat-idle-unload")
+    try:
+        yield
+    finally:
+        idle_task.cancel()
+        try:
+            await idle_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        # On shutdown, drop the model to free GPU
+        clear_tts()
 
 
 app = FastAPI(

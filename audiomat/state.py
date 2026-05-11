@@ -8,6 +8,7 @@ focused on wiring.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from dataclasses import asdict
 from pathlib import Path
@@ -19,6 +20,20 @@ from audiomat.epub import Block, parse_epub, split_sentences
 from audiomat.paths import AudiomatPaths
 from audiomat.project import Project
 from audiomat.tts import OmniVoiceTTS
+
+
+# ----------------------------------------------------------------------------
+# Idle-unload tunables
+# ----------------------------------------------------------------------------
+
+# Background task in api.py wakes every IDLE_CHECK_INTERVAL_S and unloads
+# the TTS model from GPU if it has been idle longer than IDLE_TIMEOUT_S.
+# Both are env-overridable for ops tuning. 600 s default = 10 min — long
+# enough that a user toggling between Preview tabs doesn't trigger a
+# costly reload, short enough that an abandoned session releases VRAM
+# for whatever else might want the GPU.
+IDLE_TIMEOUT_S = int(os.environ.get("AUDIOMAT_TTS_IDLE_TIMEOUT", "600"))
+IDLE_CHECK_INTERVAL_S = int(os.environ.get("AUDIOMAT_TTS_IDLE_CHECK_INTERVAL", "60"))
 
 
 # ----------------------------------------------------------------------------
@@ -64,6 +79,37 @@ def clear_tts() -> None:
     if _TTS is not None:
         _TTS.unload()
         _TTS = None
+
+
+async def idle_unload_loop(
+    timeout_s: int = IDLE_TIMEOUT_S,
+    interval_s: int = IDLE_CHECK_INTERVAL_S,
+) -> None:
+    """Background task: every ``interval_s``, drop the TTS model from GPU
+    if it has been idle ``timeout_s`` seconds. Started by the FastAPI
+    lifespan; cancelled cleanly on shutdown.
+
+    Skips unload while a render is in flight (any RENDER_THREADS entry
+    is alive) — wouldn't be safe and would waste a reload anyway, since
+    the renderer would re-trigger a load on the very next chunk.
+
+    Env tunables (read at module import time):
+      * ``AUDIOMAT_TTS_IDLE_TIMEOUT`` (default 600 s = 10 min)
+      * ``AUDIOMAT_TTS_IDLE_CHECK_INTERVAL`` (default 60 s)
+    """
+    while True:
+        try:
+            await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            return
+        tts = peek_tts()
+        if tts is None or not tts.is_loaded:
+            continue
+        if any(t.is_alive() for t in RENDER_THREADS.values()):
+            continue
+        idle = tts.seconds_since_last_used()
+        if idle is not None and idle >= timeout_s:
+            clear_tts()
 
 
 # ----------------------------------------------------------------------------

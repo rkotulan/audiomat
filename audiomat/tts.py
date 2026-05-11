@@ -25,6 +25,7 @@ Reference voice constraints (enforced at load-voice time, see voice.py):
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -88,6 +89,10 @@ class OmniVoiceTTS:
         self._model = None
         self._loading = False     # True while load() is in progress
         self._sample_rate = 24000
+        # Wall-clock timestamp of the last load() or generate() call.
+        # The idle-unload background task uses this to decide when to
+        # release VRAM. None = never used since process start.
+        self._last_used: float | None = None
 
     # -- lifecycle --
 
@@ -101,6 +106,7 @@ class OmniVoiceTTS:
     def load(self) -> None:
         """Pull weights from HF cache and instantiate the model. Idempotent."""
         if self._model is not None:
+            self._last_used = time.monotonic()
             return
         self._loading = True
         try:
@@ -124,6 +130,7 @@ class OmniVoiceTTS:
                 **from_pretrained_kwargs,
             )
             self._sample_rate = int(getattr(self._model, "sampling_rate", 24000))
+            self._last_used = time.monotonic()
         finally:
             self._loading = False
 
@@ -146,6 +153,15 @@ class OmniVoiceTTS:
     @property
     def sample_rate(self) -> int:
         return self._sample_rate
+
+    def seconds_since_last_used(self) -> float | None:
+        """Wall-clock seconds since the most recent load() / generate()
+        call, or None if the model has never been used. Driven by
+        time.monotonic so it doesn't jump on system clock changes.
+        Used by the idle-unload background task in api.py."""
+        if self._last_used is None:
+            return None
+        return time.monotonic() - self._last_used
 
     # -- generation --
 
@@ -187,6 +203,7 @@ class OmniVoiceTTS:
             speed=params.speed,
         )
         gen_s = time.time() - t0
+        self._last_used = time.monotonic()
 
         wav = audios[0].astype(np.float32)
         dur = wav.shape[-1] / self._sample_rate
