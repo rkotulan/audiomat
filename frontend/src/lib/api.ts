@@ -249,6 +249,21 @@ export const resetChapterText = (slug: string, stem: string): Promise<ChapterTex
     method: 'DELETE',
   }).then(ok<ChapterText>)
 
+// ---- per-project pronunciation dictionary ----
+
+export const getPronunciations = (slug: string): Promise<Record<string, string>> =>
+  fetch(`${BASE}/projects/${slug}/pronunciations`).then(ok<Record<string, string>>)
+
+export const savePronunciations = (
+  slug: string,
+  mapping: Record<string, string>,
+): Promise<Record<string, string>> =>
+  fetch(`${BASE}/projects/${slug}/pronunciations`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(mapping),
+  }).then(ok<Record<string, string>>)
+
 export const startRender = (slug: string, indices?: number[]) =>
   fetch(`${BASE}/projects/${slug}/render`, {
     method: 'POST',

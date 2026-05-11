@@ -26,6 +26,7 @@ import { Badge } from '@/components/ui/badge'
 import { ChapterTextEditor } from '@/components/ChapterTextEditor'
 import { InlineModelProgress } from '@/components/InlineModelProgress'
 import { InlineProgressCard } from '@/components/InlineProgressCard'
+import { PronunciationsCard } from '@/components/PronunciationsCard'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -719,6 +720,7 @@ export function ProjectDetail() {
         <TabsContent value="advanced" className="space-y-4 pt-4">
           <OutputParamsCard project={project} slug={slug} onSaved={refresh} />
           <BookMetadataCard project={project} slug={slug} onSaved={refresh} />
+          <PronunciationsCard slug={slug} />
           <Card>
             <CardHeader>
               <CardTitle className="text-destructive">Danger zone</CardTitle>
