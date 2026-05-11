@@ -35,6 +35,13 @@ class Voice:
     transcript_chars: int
     notes: str = ""
     created: str = ""           # ISO 8601 UTC, e.g. "2026-05-09T18:00:00Z"
+    # Optional TTS model slug from the model registry (audiomat/model_registry.py).
+    # None / "" / "default" → use the stock k2-fsa/OmniVoice model.
+    # Anything else → look up registry, fall back to default if missing.
+    # Lets a fine-tuned model travel with the voice that was trained on
+    # (e.g. a Ježková clone voice automatically picks the jezkova-v1
+    # fine-tune at preview / render time).
+    tts_model: str | None = None
 
     @property
     def wav_path(self) -> Path:
@@ -75,6 +82,7 @@ class Voice:
             "channels": int(self.channels),
             "transcript_chars": int(self.transcript_chars),
             "notes": self.notes,
+            "tts_model": self.tts_model,
         }
         self.meta_path.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
@@ -98,6 +106,7 @@ class Voice:
             transcript_chars=int(meta.get("transcript_chars", 0)),
             notes=meta.get("notes", ""),
             created=meta.get("created", ""),
+            tts_model=meta.get("tts_model"),
         )
 
     @classmethod
@@ -140,6 +149,7 @@ class Voice:
         channels: int,
         notes: str = "",
         overwrite: bool = False,
+        tts_model: str | None = None,
     ) -> "Voice":
         """Create a new voice library entry.
 
@@ -171,6 +181,7 @@ class Voice:
             transcript_chars=len(transcript_text.strip()),
             notes=notes,
             created=_utcnow_iso(),
+            tts_model=tts_model,
         )
         voice.save()
         return voice

@@ -52,15 +52,35 @@ class AudiomatPaths:
     def cache_root(self) -> Path:
         return self.library_root / "cache"
 
+    @property
+    def models_root(self) -> Path:
+        """User-registered TTS model checkpoints (fine-tunes, HF-sourced
+        snapshots). Each entry lives under ``models/<slug>/`` with a
+        ``meta.json`` plus the model files (config.json + safetensors etc.)
+        that ``OmniVoice.from_pretrained(<local_path>)`` consumes."""
+        return self.library_root / "models"
+
+    @property
+    def secrets_path(self) -> Path:
+        """Single JSON file with credentials (HF token, etc.). Permission
+        bits set to 0o600 by the writer; gitignored by convention. Not
+        encrypted — fs perms are the security boundary on a single-user
+        host."""
+        return self.library_root / "secrets.json"
+
     def voice_dir(self, slug: str) -> Path:
         return self.voices_root / slug
 
     def project_dir(self, slug: str) -> Path:
         return self.projects_root / slug
 
+    def model_dir(self, slug: str) -> Path:
+        return self.models_root / slug
+
     def ensure_dirs(self) -> None:
-        """Create the three root directories if they don't exist."""
-        for d in (self.voices_root, self.projects_root, self.cache_root):
+        """Create the four root directories if they don't exist."""
+        for d in (self.voices_root, self.projects_root,
+                  self.cache_root, self.models_root):
             d.mkdir(parents=True, exist_ok=True)
 
 
