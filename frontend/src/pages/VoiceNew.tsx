@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Wand2, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,8 +11,9 @@ import {
   createVoice,
   draftAudioUrl,
   draftUploadVoice,
+  listModels,
 } from '@/lib/api'
-import type { DraftUploadResult } from '@/lib/types'
+import type { DraftUploadResult, TTSModel } from '@/lib/types'
 
 export function VoiceNew() {
   const nav = useNavigate()
@@ -23,9 +24,18 @@ export function VoiceNew() {
   const [name, setName] = useState('')
   const [transcript, setTranscript] = useState('')
   const [notes, setNotes] = useState('')
+  const [ttsModel, setTtsModel] = useState<string>('')  // '' = stock default
+  const [models, setModels] = useState<TTSModel[]>([])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [autoBusy, setAutoBusy] = useState(false)
+
+  useEffect(() => {
+    listModels().then(setModels).catch(() => {
+      // Models page is optional plumbing — fall back to stock-only dropdown.
+      setModels([])
+    })
+  }, [])
 
   const onUpload = async (file: File) => {
     setErr('')
@@ -65,6 +75,7 @@ export function VoiceNew() {
         audio_path: draft.audio_path,
         transcript,
         notes,
+        tts_model: ttsModel || null,
       })
       nav('/voices')
     } catch (e) {
@@ -198,6 +209,29 @@ export function VoiceNew() {
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="e.g. clean studio recording, neutral mood"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="vmodel">TTS model</Label>
+              <select
+                id="vmodel"
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+                value={ttsModel}
+                onChange={(e) => setTtsModel(e.target.value)}
+              >
+                <option value="">OmniVoice (stock — default)</option>
+                {models.map((m) => (
+                  <option key={m.name_slug} value={m.name_slug}>
+                    {m.name} {m.source_type === 'hf' ? '(HF)' : '(local)'}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Stock OmniVoice handles 600+ languages out of the box. Pick a
+                registered fine-tune (manage them under{' '}
+                <a href="/models" className="text-primary underline">Models</a>)
+                if you've got one targeted at this speaker.
+              </p>
             </div>
 
             <div className="flex justify-end gap-2">

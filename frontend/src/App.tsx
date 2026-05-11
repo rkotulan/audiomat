@@ -6,6 +6,8 @@ import { VoiceNew } from '@/pages/VoiceNew'
 import { Projects } from '@/pages/Projects'
 import { ProjectNew } from '@/pages/ProjectNew'
 import { ProjectDetail } from '@/pages/ProjectDetail'
+import { Models } from '@/pages/Models'
+import { Settings } from '@/pages/Settings'
 
 function App() {
   return (
@@ -18,6 +20,8 @@ function App() {
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/new" element={<ProjectNew />} />
           <Route path="/projects/:slug" element={<ProjectDetail />} />
+          <Route path="/models" element={<Models />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

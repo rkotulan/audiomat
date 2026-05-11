@@ -5,9 +5,13 @@ import type {
   ChaptersResponse,
   CustomPreviewResult,
   DraftUploadResult,
+  HFRepoInfo,
+  HFTokenStatus,
+  ModelDownloadEvent,
   PreviewMatrix,
   Project,
   ProgressEvent,
+  TTSModel,
   Voice,
 } from './types'
 
@@ -54,6 +58,7 @@ export async function createVoice(args: {
   transcript: string
   notes?: string
   overwrite?: boolean
+  tts_model?: string | null
 }): Promise<Voice> {
   const fd = new FormData()
   fd.append('name', args.name)
@@ -61,13 +66,144 @@ export async function createVoice(args: {
   fd.append('transcript', args.transcript)
   fd.append('notes', args.notes ?? '')
   fd.append('overwrite', args.overwrite ? 'true' : 'false')
+  if (args.tts_model) fd.append('tts_model', args.tts_model)
   return fetch(`${BASE}/voices`, { method: 'POST', body: fd }).then(ok<Voice>)
 }
+
+export const updateVoiceModel = (slug: string, tts_model: string | null) =>
+  fetch(`${BASE}/voices/${slug}/model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tts_model }),
+  }).then(ok<Voice>)
 
 export const deleteVoice = (slug: string) =>
   fetch(`${BASE}/voices/${slug}`, { method: 'DELETE' }).then(ok)
 
 export const voiceAudioUrl = (slug: string) => `${BASE}/voices/${slug}/audio`
+
+// ---- TTS model registry ----
+
+export const listModels = (): Promise<TTSModel[]> =>
+  fetch(`${BASE}/models`).then(ok<TTSModel[]>)
+
+export const getModel = (slug: string): Promise<TTSModel> =>
+  fetch(`${BASE}/models/${slug}`).then(ok<TTSModel>)
+
+export const registerLocalModel = (body: {
+  name: string
+  src_dir: string
+  notes?: string
+  overwrite?: boolean
+}): Promise<TTSModel> =>
+  fetch(`${BASE}/models`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(ok<TTSModel>)
+
+export const deleteModel = (slug: string) =>
+  fetch(`${BASE}/models/${slug}`, { method: 'DELETE' }).then(ok)
+
+export const listMyHFRepos = (): Promise<HFRepoInfo[]> =>
+  fetch(`${BASE}/models/hf/my-repos`).then(ok<HFRepoInfo[]>)
+
+export interface ModelDownloadEvents {
+  onStarted?: (totalBytes: number) => void
+  onProgress?: (downloadedBytes: number, totalBytes: number, percent: number) => void
+}
+
+async function consumeModelDownloadSse(
+  r: Response,
+  events: ModelDownloadEvents,
+): Promise<{ model_slug: string }> {
+  if (!r.ok) {
+    const detail = await r.text().catch(() => r.statusText)
+    throw new Error(`${r.status} ${r.statusText}: ${detail}`)
+  }
+  if (!r.body) throw new Error('model-download: no response body')
+
+  const reader = r.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    let sep
+    while ((sep = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      const evt = parseSSE(block)
+      if (!evt) continue
+      const data = evt.data as ModelDownloadEvent['data' & never] as ModelDownloadEvent
+      if (evt.event === 'started') {
+        events.onStarted?.(data.total_bytes ?? 0)
+      } else if (evt.event === 'progress') {
+        events.onProgress?.(
+          data.downloaded_bytes ?? 0,
+          data.total_bytes ?? 0,
+          data.percent ?? 0,
+        )
+      } else if (evt.event === 'error') {
+        throw new Error(data.message ?? 'download failed')
+      } else if (evt.event === 'complete') {
+        return { model_slug: data.model_slug ?? '' }
+      }
+    }
+  }
+  throw new Error('model-download: stream ended without complete event')
+}
+
+export async function downloadHFModel(
+  body: {
+    name: string
+    repo_id: string
+    revision?: string | null
+    token?: string | null
+    notes?: string
+    overwrite?: boolean
+  },
+  events: ModelDownloadEvents = {},
+): Promise<{ model_slug: string }> {
+  const r = await fetch(`${BASE}/models/from-hf`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return consumeModelDownloadSse(r, events)
+}
+
+export async function redownloadModel(
+  slug: string,
+  events: ModelDownloadEvents = {},
+): Promise<{ model_slug: string }> {
+  const r = await fetch(`${BASE}/models/${slug}/redownload`, { method: 'POST' })
+  return consumeModelDownloadSse(r, events)
+}
+
+// ---- Settings ----
+
+export const getHFTokenStatus = (): Promise<HFTokenStatus> =>
+  fetch(`${BASE}/settings/hf`).then(ok<HFTokenStatus>)
+
+export const setHFToken = (token: string | null): Promise<HFTokenStatus> =>
+  fetch(`${BASE}/settings/hf`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  }).then(ok<HFTokenStatus>)
+
+export const clearHFToken = (): Promise<HFTokenStatus> =>
+  fetch(`${BASE}/settings/hf`, { method: 'DELETE' }).then(ok<HFTokenStatus>)
+
+export const validateHFToken = (token: string): Promise<{ valid: boolean; repo_count: number }> =>
+  fetch(`${BASE}/settings/hf/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  }).then(ok<{ valid: boolean; repo_count: number }>)
 
 // ---- projects ----
 

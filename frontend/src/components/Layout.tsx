@@ -1,4 +1,4 @@
-import { Headphones, Library, BookOpen } from 'lucide-react'
+import { Headphones, Library, BookOpen, Cpu, Settings as SettingsIcon } from 'lucide-react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { SystemBanner } from '@/components/SystemBanner'
 
@@ -18,6 +18,12 @@ export function Layout() {
             </NavItem>
             <NavItem to="/voices" icon={<Library className="h-4 w-4" />}>
               Voices
+            </NavItem>
+            <NavItem to="/models" icon={<Cpu className="h-4 w-4" />}>
+              Models
+            </NavItem>
+            <NavItem to="/settings" icon={<SettingsIcon className="h-4 w-4" />}>
+              Settings
             </NavItem>
           </nav>
         </div>

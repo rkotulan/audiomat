@@ -6,6 +6,9 @@ export interface ModelStatus {
   cache_target_bytes: number
   percent: number
   message: string | null
+  // Display name of the model that's currently loading / loaded. Lets
+  // SystemBanner say "Načítám Ježková v1…" instead of generic.
+  active_model: string | null
 }
 
 const POLL_MS_FAST = 500     // user is actively waiting on a button

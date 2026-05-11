@@ -10,6 +10,34 @@ export interface Voice {
   transcript_chars: number
   notes: string
   created: string
+  // Optional slug of a registered TTS model the voice prefers. Null /
+  // empty means use the stock OmniVoice. Editable via PATCH
+  // /voices/{slug}/model.
+  tts_model: string | null
+}
+
+export interface TTSModel {
+  name: string
+  name_slug: string
+  source_type: 'local' | 'hf'
+  source_ref: string                // local: src path; hf: "<org>/<repo>"
+  hf_revision: string | null
+  size_bytes: number
+  notes: string
+  created: string
+}
+
+export interface HFRepoInfo {
+  repo_id: string
+  private: boolean
+  last_modified: string
+  size_bytes: number
+  tags: string[]
+}
+
+export interface HFTokenStatus {
+  has_token: boolean
+  source: 'env' | 'secrets_file' | null
 }
 
 export interface BookInfo {
@@ -157,4 +185,14 @@ export interface CustomPreviewResult {
   cached: boolean
   gen_seconds: number
   duration_s: number
+}
+
+/** Streamed by POST /api/models/from-hf and /api/models/{slug}/redownload. */
+export interface ModelDownloadEvent {
+  kind: 'started' | 'progress' | 'complete' | 'error'
+  downloaded_bytes: number
+  total_bytes: number
+  percent: number
+  message: string | null
+  model_slug: string | null
 }
