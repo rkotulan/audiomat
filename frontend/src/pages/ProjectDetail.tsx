@@ -839,14 +839,17 @@ function patchChapterStatus(
  * `(total / sample) * gen_seconds`. Includes a small per-chapter
  * overhead bump (~10 %) for ffmpeg loudnorm + concat passes.
  *
- * Cached variants have gen_seconds=0; we return "—" for those (no
- * fresh measurement). User can re-tune to force a re-render.
+ * gen_seconds is 0 only when the cell was generated before the
+ * previews/_gen_times.json sidecar existed (legacy entries) — in that
+ * case we can't extrapolate and the UI nudges the user to re-tune.
+ * For cells with a sidecar entry, cached vs fresh doesn't matter:
+ * gen_seconds is the same number either way.
  */
 function estimateBookRender(
   matrix: PreviewMatrix,
   variant: PreviewMatrix['variants'][number],
 ): string {
-  if (variant.cached || variant.gen_seconds <= 0) {
+  if (variant.gen_seconds <= 0) {
     return '— (re-tune to estimate)'
   }
   const ratio = matrix.total_book_chars / Math.max(matrix.sample_chars, 1)
