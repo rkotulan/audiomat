@@ -123,7 +123,7 @@ export function ChapterTextEditor({ open, slug, stem, onClose, onSaved }: Props)
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-5xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">
             Edit chapter: {stem ?? ''}
