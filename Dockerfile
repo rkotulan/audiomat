@@ -1,8 +1,15 @@
 # =============================================================================
 # audiomat — multi-stage build
 # =============================================================================
-# Stage 1: Node 20 builder for the React frontend → frontend/dist
-# Stage 2: CUDA 12.8 + Python 3.12 runtime serving FastAPI + static frontend
+# Stage 1: Node 22 builder for the React frontend → frontend/dist
+# Stage 2: pytorch/pytorch base (torch + torchaudio + cuDNN baked in) +
+#          FastAPI app, served on :7860
+#
+# Why pytorch/pytorch instead of nvidia/cuda + manual pip install?
+# Pushing a 6.86 GB torch+torchaudio layer to Docker Hub fails reliably on
+# residential uploads (free-tier per-blob timeout). Using the official
+# pytorch image means torch is part of base layers (already on Docker Hub
+# under pytorch/pytorch), so docker push only uploads OUR diff (~1.5 GB).
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -28,9 +35,12 @@ RUN npm run build
 
 
 # -----------------------------------------------------------------------------
-# Stage 2: Python + CUDA runtime
+# Stage 2: pytorch base + audiomat runtime
 # -----------------------------------------------------------------------------
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04 AS runtime
+# Ships Python 3.11 (conda), torch 2.11.0, torchaudio, CUDA 12.8, cuDNN 9.
+# Pinned by exact version tag (not :latest) so a base image rotation can't
+# silently shift our runtime behavior.
+FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -40,40 +50,29 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HF_HOME=/data/cache/huggingface \
     AUDIOMAT_LIBRARY_ROOT=/data
 
-# System deps — Python 3.12 + ffmpeg (for the bundled imageio-ffmpeg fallback
-# we *could* skip apt ffmpeg, but having it system-wide is cheaper than
-# imageio-ffmpeg downloading the binary on every container build).
+# System deps the pytorch base doesn't ship: ffmpeg (audio I/O) + libsndfile
+# (soundfile python backend). Kept lean — small layer = fast pushes.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common \
-        curl ca-certificates \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        python3.12 python3.12-venv python3.12-dev \
         ffmpeg \
         libsndfile1 \
-        git \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 - \
-    && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
-    && ln -sf /usr/local/bin/pip /usr/local/bin/pip3
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 1) Install PyTorch with CUDA 12.8 wheels first (separate layer — these are
-#    multi-GB and rarely change vs application deps).
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cu128 \
-        torch==2.8.0+cu128 \
-        torchaudio==2.8.0+cu128
-
-# 2) audiomat application deps (without torch — already installed above).
+# audiomat application deps. torch + torchaudio are pre-installed in the
+# base image; requirements.txt deliberately omits them.
+# --break-system-packages: pytorch/pytorch base ships a Debian-managed
+# Python with PEP 668 protection. We're a single-purpose container, no
+# other Python apps share this interpreter, so installing into the system
+# site-packages is safe — and a venv layer would just bloat the image.
 COPY requirements.txt /app/requirements.txt
-RUN pip install -r /app/requirements.txt
+RUN pip install --break-system-packages -r /app/requirements.txt
 
-# 3) audiomat code.
+# audiomat code
 COPY audiomat /app/audiomat
 COPY pyproject.toml /app/pyproject.toml
 
-# 4) Frontend bundle from stage 1 → mounted by FastAPI as static.
+# Frontend bundle from stage 1 → mounted by FastAPI as static
 COPY --from=frontend-builder /build/dist /app/static
 
 # Library volume (voices/, projects/, cache/). Will be a Docker volume

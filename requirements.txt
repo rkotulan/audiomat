@@ -1,6 +1,11 @@
 # Core TTS
-torch>=2.8.0
-torchaudio>=2.8.0
+# NOTE: torch + torchaudio intentionally omitted — they come from the
+# pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime base image in the
+# Dockerfile. Pinning them here would force a re-install on top of the
+# base and reintroduce the 6+ GB layer that Docker Hub free-tier rejects.
+# For local-dev installs without the base image, add explicitly:
+#   pip install --extra-index-url https://download.pytorch.org/whl/cu128 \
+#       torch==2.11.0 torchaudio==2.11.0
 omnivoice>=0.1.5
 
 # Web API
