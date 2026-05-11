@@ -162,6 +162,26 @@ def preview_matrix(slug: str):
     ref_text = voice.transcript()
     ref_audio = str(voice.wav_path)
     total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
+    # Sidecar JSON next to the cached WAVs records per-file gen_seconds.
+    # Without it, cached cells return gen_seconds=0 and the UI can't
+    # compute the "Est. full book render" extrapolation — user has to
+    # re-tune just to estimate. Persist the wall-clock from the original
+    # generation so cache hits stay informative.
+    gen_times_path = previews_dir / "_gen_times.json"
+    gen_times: dict[str, float] = {}
+    if gen_times_path.exists():
+        try:
+            gen_times = _json.loads(gen_times_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            gen_times = {}
+
+    # Project's render-speed param flows into the matrix so the cells
+    # reflect the user's chosen tempo (e.g. speed=0.9 for slower-paced
+    # audiobook narration). Without this, cells were stuck at the
+    # hardcoded PREVIEW_MATRIX value of 1.0 even after the user dropped
+    # the project to 0.9 via Fine tune → Use this — and the displayed
+    # "speed 1.00" no longer matched the project state.
+    project_speed = proj.params.speed
 
     def event_gen():
         tts = get_tts_for_voice(voice)
@@ -181,21 +201,25 @@ def preview_matrix(slug: str):
         }
 
         results: list[dict] = []
+        gen_times_dirty = False
         for idx, v in enumerate(PREVIEW_MATRIX):
             try:
+                # Speed comes from the project, not the preset — matrix
+                # is a num_step/gs A/B at the user's chosen tempo.
+                variant = {**v, "speed": project_speed}
                 key_src = (
-                    f"{clean}|{v['num_step']}|{v['guidance_scale']}"
-                    f"|{v['speed']}|{voice.name_slug}"
+                    f"{clean}|{variant['num_step']}|{variant['guidance_scale']}"
+                    f"|{variant['speed']}|{voice.name_slug}"
                 )
                 key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
-                wav_path = previews_dir / f"{v['label']}_{key}.wav"
+                wav_path = previews_dir / f"{variant['label']}_{key}.wav"
 
                 if wav_path.exists() and wav_path.stat().st_size > 1024:
                     cell = {
-                        **v,
+                        **variant,
                         "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
                         "cached": True,
-                        "gen_seconds": 0.0,
+                        "gen_seconds": float(gen_times.get(wav_path.name, 0.0)),
                         "duration_s": wav_duration_s(wav_path),
                     }
                 else:
@@ -205,14 +229,16 @@ def preview_matrix(slug: str):
                         language=language,
                         ref_text=ref_text,
                         ref_audio=ref_audio,
-                        num_step=v["num_step"],
-                        guidance_scale=v["guidance_scale"],
-                        speed=v["speed"],
+                        num_step=variant["num_step"],
+                        guidance_scale=variant["guidance_scale"],
+                        speed=variant["speed"],
                     )
                     gen_s = time.time() - t0
                     sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+                    gen_times[wav_path.name] = round(gen_s, 2)
+                    gen_times_dirty = True
                     cell = {
-                        **v,
+                        **variant,
                         "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
                         "cached": False,
                         "gen_seconds": round(gen_s, 2),
@@ -234,6 +260,16 @@ def preview_matrix(slug: str):
                 "event": "cell_done",
                 "data": _json.dumps({"index": idx, "variant": cell}),
             }
+
+        if gen_times_dirty:
+            try:
+                gen_times_path.write_text(
+                    _json.dumps(gen_times, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError:
+                # Non-fatal — estimates will just have to re-time next round.
+                pass
 
         yield {
             "event": "complete",
