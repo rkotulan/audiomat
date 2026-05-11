@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
   Cpu,
@@ -7,6 +7,7 @@ import {
   Download,
   FolderInput,
   HardDrive,
+  Library,
   Lock,
   Plus,
   RefreshCw,
@@ -34,10 +35,11 @@ import {
   getHFTokenStatus,
   listModels,
   listMyHFRepos,
+  listVoices,
   redownloadModel,
   registerLocalModel,
 } from '@/lib/api'
-import type { HFRepoInfo, HFTokenStatus, TTSModel } from '@/lib/types'
+import type { HFRepoInfo, HFTokenStatus, TTSModel, Voice } from '@/lib/types'
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -49,26 +51,48 @@ function formatBytes(n: number): string {
 export function Models() {
   const nav = useNavigate()
   const [models, setModels] = useState<TTSModel[]>([])
+  const [voices, setVoices] = useState<Voice[]>([])
   const [hfStatus, setHfStatus] = useState<HFTokenStatus | null>(null)
   const [err, setErr] = useState('')
   const [addLocalOpen, setAddLocalOpen] = useState(false)
   const [addHFOpen, setAddHFOpen] = useState(false)
   const { confirm, dialog: confirmDialog } = useConfirm()
 
-  const refresh = () =>
-    listModels()
-      .then(setModels)
+  const refresh = () => {
+    Promise.all([listModels(), listVoices()])
+      .then(([m, v]) => {
+        setModels(m)
+        setVoices(v)
+      })
       .catch((e) => setErr(String(e)))
+  }
 
   useEffect(() => {
     refresh()
     getHFTokenStatus().then(setHfStatus).catch(() => {})
   }, [])
 
-  const onDelete = (m: TTSModel) =>
+  // Map model slug → voices that currently reference it. Used both in
+  // the ModelRow "X voices using" badge and in the delete-confirm copy.
+  const voicesByModel = useMemo(() => {
+    const map = new Map<string, Voice[]>()
+    for (const v of voices) {
+      if (!v.tts_model) continue
+      if (!map.has(v.tts_model)) map.set(v.tts_model, [])
+      map.get(v.tts_model)!.push(v)
+    }
+    return map
+  }, [voices])
+
+  const onDelete = (m: TTSModel) => {
+    const users = voicesByModel.get(m.name_slug) ?? []
+    const usersNote =
+      users.length > 0
+        ? ` ${users.length} voice(s) currently reference this model (${users.map((v) => v.name).join(', ')}) — they will fall back to stock OmniVoice on next render.`
+        : ''
     confirm({
       title: `Delete model "${m.name}"?`,
-      description: `Removes ${formatBytes(m.size_bytes)} of files from the registry. Voices that referenced this model will fall back to the stock OmniVoice on next render — fix them up under Voices if you want something else.`,
+      description: `Removes ${formatBytes(m.size_bytes)} of files from the registry.${usersNote}`,
       confirmText: 'Delete',
       destructive: true,
       onConfirm: async () => {
@@ -80,6 +104,7 @@ export function Models() {
         }
       },
     })
+  }
 
   const onRedownload = (m: TTSModel) => {
     if (m.source_type !== 'hf') return
@@ -155,6 +180,7 @@ export function Models() {
                 <ModelRow
                   key={m.name_slug}
                   model={m}
+                  usedBy={voicesByModel.get(m.name_slug) ?? []}
                   onDelete={() => onDelete(m)}
                   onRedownload={() => onRedownload(m)}
                 />
@@ -190,10 +216,12 @@ export function Models() {
 
 function ModelRow({
   model,
+  usedBy,
   onDelete,
   onRedownload,
 }: {
   model: TTSModel
+  usedBy: Voice[]
   onDelete: () => void
   onRedownload: () => void
 }) {
@@ -217,6 +245,12 @@ function ModelRow({
           <span className="text-xs text-muted-foreground">
             {formatBytes(model.size_bytes)}
           </span>
+          {usedBy.length > 0 && (
+            <Badge variant="outline" className="font-normal text-xs">
+              <Library className="h-3 w-3" />
+              {usedBy.length} voice{usedBy.length === 1 ? '' : 's'}
+            </Badge>
+          )}
         </div>
         <div className="text-xs text-muted-foreground font-mono break-all">
           {isHF
@@ -225,6 +259,23 @@ function ModelRow({
         </div>
         {model.notes && (
           <p className="text-xs text-muted-foreground italic">{model.notes}</p>
+        )}
+        {usedBy.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Used by:{' '}
+            {usedBy.map((v, i) => (
+              <span key={v.name_slug}>
+                {i > 0 && ', '}
+                <Link
+                  to="/voices"
+                  className="text-foreground hover:underline"
+                  title="Manage on Voices page"
+                >
+                  {v.name}
+                </Link>
+              </span>
+            ))}
+          </p>
         )}
       </div>
       <div className="flex gap-1 shrink-0">

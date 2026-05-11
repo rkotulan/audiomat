@@ -1,16 +1,25 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, BookOpen, Plus, Trash2, Download } from 'lucide-react'
+import { ArrowRight, BookOpen, Cpu, Plus, Trash2, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { listVoices, deleteVoice, voiceAudioUrl } from '@/lib/api'
-import type { Voice } from '@/lib/types'
+import { Label } from '@/components/ui/label'
+import {
+  deleteVoice,
+  listModels,
+  listVoices,
+  updateVoiceModel,
+  voiceAudioUrl,
+} from '@/lib/api'
+import type { TTSModel, Voice } from '@/lib/types'
 import { useConfirm } from '@/components/ConfirmDialog'
 
 export function Voices() {
   const [voices, setVoices] = useState<Voice[] | null>(null)
+  const [models, setModels] = useState<TTSModel[]>([])
   const [error, setError] = useState('')
+  const [savingModelFor, setSavingModelFor] = useState<string | null>(null)
   const { confirm, dialog: confirmDialog } = useConfirm()
 
   const refresh = () =>
@@ -20,7 +29,29 @@ export function Voices() {
 
   useEffect(() => {
     refresh()
+    // Models page is the canonical source for registered TTS models;
+    // if it's empty / fails we still render the picker as just "stock".
+    listModels()
+      .then(setModels)
+      .catch(() => setModels([]))
   }, [])
+
+  const onChangeModel = async (slug: string, newModel: string) => {
+    setSavingModelFor(slug)
+    setError('')
+    try {
+      const updated = await updateVoiceModel(slug, newModel || null)
+      // Patch the voice in place so the select reflects the saved value
+      // without a full refetch round-trip.
+      setVoices((prev) =>
+        prev ? prev.map((v) => (v.name_slug === slug ? updated : v)) : prev,
+      )
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSavingModelFor(null)
+    }
+  }
 
   const onDelete = (slug: string, name: string) => {
     confirm({
@@ -112,6 +143,36 @@ export function Voices() {
                   <span className="font-mono text-right">{formatDate(v.created)}</span>
                 </div>
                 {v.notes && <p className="text-xs italic">{v.notes}</p>}
+
+                <div className="space-y-1.5 pt-1">
+                  <Label
+                    htmlFor={`vmodel-${v.name_slug}`}
+                    className="text-xs flex items-center gap-1.5"
+                  >
+                    <Cpu className="h-3 w-3" />
+                    TTS model
+                    {savingModelFor === v.name_slug && (
+                      <span className="ml-auto text-xs text-muted-foreground italic">
+                        saving…
+                      </span>
+                    )}
+                  </Label>
+                  <select
+                    id={`vmodel-${v.name_slug}`}
+                    className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs shadow-sm"
+                    value={v.tts_model ?? ''}
+                    onChange={(e) => onChangeModel(v.name_slug, e.target.value)}
+                    disabled={savingModelFor === v.name_slug}
+                  >
+                    <option value="">OmniVoice (stock)</option>
+                    {models.map((m) => (
+                      <option key={m.name_slug} value={m.name_slug}>
+                        {m.name} ({m.source_type === 'hf' ? 'HF' : 'local'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <audio
                   controls
                   src={voiceAudioUrl(v.name_slug)}
