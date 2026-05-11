@@ -1008,7 +1008,7 @@ function PreviewTab({
                 <CardTitle className="flex items-center justify-between">
                   <span className="flex items-center gap-2">
                     {v.label}
-                    {tunedFlags.has(idx) && (
+                    {(v.tuned || tunedFlags.has(idx)) && (
                       <Badge variant="secondary" className="font-normal">
                         modified
                       </Badge>
@@ -1125,7 +1125,14 @@ function FineTuneDialog({
     setBusy(true)
     setErr('')
     try {
-      const result = await previewCustom(slug, params)
+      const result = await previewCustom(slug, {
+        ...params,
+        // Tag with the matrix cell label so the backend persists this
+        // tuning into previews/_tuned_cells.json — the matrix will
+        // restore it on the next render instead of falling back to the
+        // preset.
+        label: variant?.label,
+      })
       onTuned(result)
     } catch (e) {
       setErr(String(e))

@@ -338,7 +338,15 @@ function parseSSE(block: string): { event: string; data: any } | null {
 
 export const previewCustom = (
   slug: string,
-  params: { num_step: number; guidance_scale: number; speed: number },
+  params: {
+    num_step: number
+    guidance_scale: number
+    speed: number
+    // Optional matrix-cell label. When present, the backend stores this
+    // tuning in previews/_tuned_cells.json so the matrix shows it on
+    // next render too (survives page refresh).
+    label?: string
+  },
 ): Promise<CustomPreviewResult> =>
   fetch(`${BASE}/projects/${slug}/preview-custom`, {
     method: 'POST',

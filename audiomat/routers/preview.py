@@ -183,6 +183,18 @@ def preview_matrix(slug: str):
     # "speed 1.00" no longer matched the project state.
     project_speed = proj.params.speed
 
+    # Per-cell tuning overrides persisted by /preview-custom (when called
+    # with a ``label`` field). Lets a Fine tune dialog session survive a
+    # page refresh: the matrix re-render finds the tuned params here and
+    # applies them on top of the preset.
+    tuned_cells_path = previews_dir / "_tuned_cells.json"
+    tuned_cells: dict[str, dict] = {}
+    if tuned_cells_path.exists():
+        try:
+            tuned_cells = _json.loads(tuned_cells_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            tuned_cells = {}
+
     def event_gen():
         tts = get_tts_for_voice(voice)
         tts.load()
@@ -205,8 +217,19 @@ def preview_matrix(slug: str):
         for idx, v in enumerate(PREVIEW_MATRIX):
             try:
                 # Speed comes from the project, not the preset — matrix
-                # is a num_step/gs A/B at the user's chosen tempo.
+                # is a num_step/gs A/B at the user's chosen tempo. A
+                # per-cell tuning override (from a prior Fine tune call)
+                # wins over both the preset and the project speed.
                 variant = {**v, "speed": project_speed}
+                override = tuned_cells.get(v["label"])
+                if isinstance(override, dict):
+                    if "num_step" in override:
+                        variant["num_step"] = int(override["num_step"])
+                    if "guidance_scale" in override:
+                        variant["guidance_scale"] = float(override["guidance_scale"])
+                    if "speed" in override:
+                        variant["speed"] = float(override["speed"])
+                    variant["tuned"] = True
                 key_src = (
                     f"{clean}|{variant['num_step']}|{variant['guidance_scale']}"
                     f"|{variant['speed']}|{voice.name_slug}"
@@ -305,9 +328,40 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
     clean = prepare_for_tts(apply_pronunciations(sample_text, pronunciations), lang=language)
     total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
 
+    # If the caller tagged this with a matrix cell label, persist the
+    # tuning as a per-cell override so /preview-matrix shows the same
+    # params after a refresh (instead of reverting to the preset).
+    tuned_cells_path = previews_dir / "_tuned_cells.json"
+    if req.label:
+        try:
+            tuned = (
+                _json.loads(tuned_cells_path.read_text(encoding="utf-8"))
+                if tuned_cells_path.exists() else {}
+            )
+        except (OSError, ValueError):
+            tuned = {}
+        tuned[req.label] = {
+            "num_step": req.num_step,
+            "guidance_scale": req.guidance_scale,
+            "speed": req.speed,
+        }
+        try:
+            tuned_cells_path.write_text(
+                _json.dumps(tuned, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            # Non-fatal — preview-custom still succeeds, just no persistence.
+            pass
+
     key_src = f"{clean}|{req.num_step}|{req.guidance_scale}|{req.speed}|{voice.name_slug}"
     key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
-    wav_path = previews_dir / f"Custom_{key}.wav"
+    # When tagged with a label, save under the matrix-friendly filename
+    # (``<label>_<hash>.wav``) so /preview-matrix sees a cache hit on
+    # next render. Without the label, fall back to ``Custom_<hash>.wav``
+    # — ephemeral pre-`label` behavior, kept for backwards compat.
+    file_prefix = req.label if req.label else "Custom"
+    wav_path = previews_dir / f"{file_prefix}_{key}.wav"
 
     base = {
         "num_step": req.num_step,
@@ -321,8 +375,21 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
         "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
     }
 
+    # Same sidecar that /preview-matrix uses so cache hits can recover
+    # gen_seconds on either endpoint. We update it for all preview-custom
+    # generations (label or not) — Custom_*.wav entries are harmless if
+    # they never get looked up by the matrix.
+    gen_times_path = previews_dir / "_gen_times.json"
+    gen_times: dict[str, float] = {}
+    if gen_times_path.exists():
+        try:
+            gen_times = _json.loads(gen_times_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            gen_times = {}
+
     if wav_path.exists() and wav_path.stat().st_size > 1024:
-        return {**base, "cached": True, "gen_seconds": 0.0,
+        return {**base, "cached": True,
+                "gen_seconds": float(gen_times.get(wav_path.name, 0.0)),
                 "duration_s": wav_duration_s(wav_path)}
 
     tts = get_tts_for_voice(voice)
@@ -341,6 +408,14 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
     )
     gen_s = time.time() - t0
     sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+    gen_times[wav_path.name] = round(gen_s, 2)
+    try:
+        gen_times_path.write_text(
+            _json.dumps(gen_times, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
     return {**base, "cached": False, "gen_seconds": round(gen_s, 2),
             "duration_s": round(audios[0].shape[-1] / sr, 2)}
 

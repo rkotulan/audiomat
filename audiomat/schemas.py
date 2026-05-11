@@ -106,6 +106,12 @@ class PreviewCustomRequest(BaseModel):
     num_step: int = 48
     guidance_scale: float = 2.0
     speed: float = 1.0
+    # Optional matrix cell label ("Fast" / "Balanced" / "Crisp" / "Stable").
+    # When present, the backend persists this tuning as a per-cell
+    # override in previews/_tuned_cells.json — survives page refresh so
+    # the matrix re-render shows the tuned cell at its custom params.
+    # Omit (or None) to keep the call ephemeral (legacy behavior).
+    label: str | None = None
 
 
 # ----------------------------------------------------------------------------

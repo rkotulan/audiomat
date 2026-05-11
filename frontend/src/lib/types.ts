@@ -122,6 +122,10 @@ export interface PreviewVariant {
   cached: boolean
   gen_seconds: number
   duration_s: number
+  // Server-side flag: true when the user has previously fine-tuned this
+  // cell and the override is persisted in previews/_tuned_cells.json.
+  // Survives page refresh.
+  tuned?: boolean
 }
 
 export interface PreviewMatrix {
