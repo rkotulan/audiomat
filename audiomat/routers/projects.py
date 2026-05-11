@@ -13,10 +13,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from audiomat.epub import parse_epub
 from audiomat.project import Project, RenderParams
+from audiomat.pronunciations import (
+    load_pronunciations,
+    save_pronunciations,
+)
 from audiomat.schemas import (
     BlocksSkippedRequest,
     BookMetaRequest,
@@ -297,3 +301,39 @@ def delete_project(slug: str):
     if slug in RENDER_QUEUES:
         RENDER_QUEUES.pop(slug, None)
     return {"deleted": slug}
+
+
+# ----------------------------------------------------------------------------
+# Pronunciation dictionary
+# ----------------------------------------------------------------------------
+
+
+@router.get("/{slug}/pronunciations")
+def get_pronunciations(slug: str) -> dict[str, str]:
+    """Return the project's pronunciation map. Empty dict if none set."""
+    proj = load_project_or_404(slug)
+    return load_pronunciations(proj.dir)
+
+
+@router.put("/{slug}/pronunciations")
+def put_pronunciations(slug: str, mapping: dict = Body(...)):
+    """Replace the project's pronunciation map. Empty body deletes the
+    file entirely. Cache invalidation is handled by the render
+    signature — changing the dict bumps the per-chunk sig, forcing
+    re-synth on the next render. Returns the saved map (with empty
+    keys filtered out).
+
+    Accepted shape: ``{string: string}``. Non-string values raise 400
+    instead of being silently coerced — bad client data should fail
+    loudly.
+    """
+    proj = load_project_or_404(slug)
+    if not isinstance(mapping, dict):
+        raise HTTPException(400, "body must be a JSON object {string: string}")
+    for k, v in mapping.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise HTTPException(400, "pronunciations must be string→string")
+    save_pronunciations(proj.dir, mapping)
+    saved = load_pronunciations(proj.dir)
+    proj.append_log(f"pronunciations updated: {len(saved)} entries")
+    return saved

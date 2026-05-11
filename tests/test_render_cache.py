@@ -125,6 +125,7 @@ def _renderer(tmp_path: Path, *, voice_slug="alice", lang="cs",
     r.tts = None
     r.blocks = []
     r.chunks_root = chunks_dir
+    r.pronunciations = {}
     return r
 
 
@@ -165,6 +166,7 @@ class TestParamsSignature:
             r.tts = None
             r.blocks = []
             r.chunks_root = same_dir
+            r.pronunciations = {}
             return r
 
         assert _build(params1)._params_signature() != _build(params2)._params_signature()
@@ -181,6 +183,7 @@ class TestParamsSignature:
             r.tts = None
             r.blocks = []
             r.chunks_root = tmp_path
+            r.pronunciations = {}
             return r
 
         assert _build(2.0)._params_signature() != _build(2.5)._params_signature()
@@ -198,6 +201,7 @@ class TestParamsSignature:
             r.tts = None
             r.blocks = []
             r.chunks_root = tmp_path
+            r.pronunciations = {}
             return r
 
         assert _build("cs")._params_signature() != _build("en")._params_signature()
@@ -218,6 +222,7 @@ class TestParamsSignature:
         r.tts = None
         r.blocks = []
         r.chunks_root = tmp_path
+        r.pronunciations = {}
         sig_before = r._params_signature()
 
         # Bump mtime forward by a full second so int() comparison flips.

@@ -24,6 +24,11 @@ from audiomat.chunker import make_chunks
 from audiomat.epub import Block
 from audiomat.headers import inject_header_pause
 from audiomat.project import Project
+from audiomat.pronunciations import (
+    apply_pronunciations,
+    load_pronunciations,
+    signature as pronunciations_signature,
+)
 from audiomat.slug import chapter_stem
 from audiomat.tts import OmniVoiceTTS
 from audiomat.voice import Voice
@@ -136,6 +141,12 @@ class ProjectRenderer:
         self.blocks = blocks
         self.chunks_root = project.chunks_dir
         self.chunks_root.mkdir(parents=True, exist_ok=True)
+        # Load the project's pronunciation dict once. Renders are short-
+        # lived (one HTTP call) so re-reading mid-render isn't needed;
+        # if the user edits the dict during a render, the change takes
+        # effect on the next /render call (chunks already in flight
+        # finish on the old map, which is the sane behavior).
+        self.pronunciations = load_pronunciations(project.dir)
 
     # -- cache key --
 
@@ -161,10 +172,14 @@ class ProjectRenderer:
             voice_mtime = 0
         p = self.project.params
         lang = self.project.book.language or "cs"
+        # Pronunciation dict hash so an edit/add/remove invalidates
+        # cached chunks (otherwise stale audio with the un-substituted
+        # word would replay forever).
+        pron_sig = pronunciations_signature(self.pronunciations)
         src = (
             f"{self.voice.name_slug}|{voice_mtime}"
             f"|{p.num_step}|{p.guidance_scale}|{p.speed}"
-            f"|{lang}"
+            f"|{lang}|{pron_sig}"
         )
         return hashlib.sha256(src.encode("utf-8")).hexdigest()[:16]
 
@@ -248,8 +263,14 @@ class ProjectRenderer:
                 wav_path.unlink()
 
             try:
+                # Apply pronunciation overrides BEFORE handing text to
+                # the TTS model. The manifest still stores the original
+                # chunk text for cache equality, while the signature
+                # (which includes the dict hash) handles dict-change
+                # invalidation.
+                text_for_tts = apply_pronunciations(text, self.pronunciations)
                 result = self.tts.generate(
-                    text=text,
+                    text=text_for_tts,
                     voice=self.voice,
                     params=self.project.params,
                     language=self.project.book.language or "cs",

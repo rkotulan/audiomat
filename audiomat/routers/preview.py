@@ -20,6 +20,7 @@ from audiomat.epub import Block, parse_epub, split_sentences
 from audiomat.headers import prepare_for_tts
 from audiomat.num2text import normalize_lang
 from audiomat.project import Project
+from audiomat.pronunciations import apply_pronunciations, load_pronunciations
 from audiomat.routers.projects import is_metadata_block as _is_metadata_block
 from audiomat.schemas import PreviewCustomRequest
 from audiomat.state import (
@@ -154,7 +155,10 @@ def preview_matrix(slug: str):
     # EPUB DC metadata uses BCP 47 (cs-CZ); OmniVoice + num2words want
     # ISO 639-1 (cs) — strip region suffix at the boundary.
     language = normalize_lang(proj.book.language or "cs")
-    clean = prepare_for_tts(sample_text, lang=language)
+    # Apply per-project pronunciation overrides BEFORE prepare_for_tts so
+    # the preview reflects what the actual render will produce.
+    pronunciations = load_pronunciations(proj.dir)
+    clean = prepare_for_tts(apply_pronunciations(sample_text, pronunciations), lang=language)
     ref_text = voice.transcript()
     ref_audio = str(voice.wav_path)
     total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
@@ -261,7 +265,8 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
     previews_dir = proj.dir / "previews"
     previews_dir.mkdir(exist_ok=True)
     language = normalize_lang(proj.book.language or "cs")
-    clean = prepare_for_tts(sample_text, lang=language)
+    pronunciations = load_pronunciations(proj.dir)
+    clean = prepare_for_tts(apply_pronunciations(sample_text, pronunciations), lang=language)
     total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
 
     key_src = f"{clean}|{req.num_step}|{req.guidance_scale}|{req.speed}|{voice.name_slug}"
