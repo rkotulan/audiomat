@@ -8,6 +8,9 @@ can import this file cheaply.
 Production defaults from CLAUDE.md Stage 3:
 
 * model: ``k2-fsa/OmniVoice`` (Apache 2.0, public HF)
+* revision: pinned to a known-good commit SHA (see ``DEFAULT_REVISION``);
+  protects against silent upstream weight changes between runs and gives
+  reproducible builds. Bump deliberately after end-to-end testing.
 * device: ``cuda:0``
 * dtype: float16
 * num_step: 48
@@ -33,6 +36,14 @@ from audiomat.voice import Voice
 
 
 DEFAULT_MODEL_ID = "k2-fsa/OmniVoice"
+# Pinned HF revision so a silent upstream weight change can't shift
+# voice quality / cache invariance between runs. Bump deliberately
+# after testing a new snapshot end-to-end on a real CZ render. Override
+# at runtime via OmniVoiceTTS(model_revision=...).
+#
+# Snapshot date: 2026-05-07 (k2-fsa/OmniVoice main HEAD at the time of
+# this pin). https://huggingface.co/k2-fsa/OmniVoice/commits/main
+DEFAULT_REVISION = "999c332499c708b116876ff5fe1aa5dd15f422ce"
 DEFAULT_LANGUAGE = "cs"
 DEFAULT_DEVICE = "cuda:0"
 DEFAULT_DTYPE = "float16"
@@ -65,10 +76,15 @@ class OmniVoiceTTS:
         model_id: str = DEFAULT_MODEL_ID,
         device: str = DEFAULT_DEVICE,
         dtype: str = DEFAULT_DTYPE,
+        model_revision: str | None = DEFAULT_REVISION,
     ):
         self.model_id = model_id
         self.device = device
         self.dtype = dtype
+        # Pass through to OmniVoice.from_pretrained's `revision` param.
+        # None = follow main HEAD (not recommended for prod; reproducibility
+        # suffers). Default = the pinned snapshot.
+        self.model_revision = model_revision
         self._model = None
         self._loading = False     # True while load() is in progress
         self._sample_rate = 24000
@@ -97,10 +113,15 @@ class OmniVoiceTTS:
                 "float32": torch.float32,
             }
             torch_dtype = dtype_map[self.dtype]
+            from_pretrained_kwargs: dict = {
+                "device_map": self.device,
+                "dtype": torch_dtype,
+            }
+            if self.model_revision is not None:
+                from_pretrained_kwargs["revision"] = self.model_revision
             self._model = OmniVoice.from_pretrained(
                 self.model_id,
-                device_map=self.device,
-                dtype=torch_dtype,
+                **from_pretrained_kwargs,
             )
             self._sample_rate = int(getattr(self._model, "sampling_rate", 24000))
         finally:
@@ -215,10 +236,12 @@ if __name__ == "__main__":
     # the actual model (would download 3 GB). For real-model verification
     # use scripts/tts_test_omnivoice.py in skleneny-muz-tts/.
     print(f"DEFAULT_MODEL_ID  = {DEFAULT_MODEL_ID}")
+    print(f"DEFAULT_REVISION  = {DEFAULT_REVISION}")
     print(f"DEFAULT_DEVICE    = {DEFAULT_DEVICE}")
     print(f"DEFAULT_DTYPE     = {DEFAULT_DTYPE}")
     print(f"DEFAULT_LANGUAGE  = {DEFAULT_LANGUAGE}")
     tts = OmniVoiceTTS()
     print(f"\ninstance: model_id={tts.model_id}, device={tts.device}, dtype={tts.dtype}")
+    print(f"          revision={tts.model_revision}")
     print(f"is_loaded={tts.is_loaded}, sample_rate={tts.sample_rate}")
     print("\n(real-model load deferred — would pull 3 GB from HF)")
