@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 
 from audiomat.audio import convert_voice_ref
 from audiomat.project import Project
-from audiomat.schemas import TranscribeRequest, VoiceOut
+from audiomat.schemas import TranscribeRequest, VoiceModelRequest, VoiceOut
 from audiomat.state import PATHS
 from audiomat.voice import Voice
 
@@ -113,10 +113,15 @@ async def create_voice(
     transcript: str = Form(...),
     notes: str = Form(""),
     overwrite: bool = Form(False),
+    tts_model: str | None = Form(None),
 ):
     """Stage 2 of voice creation: commit a previously-uploaded audio +
     transcript into the library. ``audio_path`` comes from
-    ``/api/voices/draft-upload``."""
+    ``/api/voices/draft-upload``.
+
+    ``tts_model`` (optional) — slug of a registered TTS model the voice
+    should default to at preview / render time. Null / empty / "default"
+    means use the stock OmniVoice."""
     if not name.strip():
         raise HTTPException(400, "name is required")
     if not transcript.strip():
@@ -125,6 +130,12 @@ async def create_voice(
     src = Path(audio_path)
     if not src.exists():
         raise HTTPException(404, f"audio_path not found: {audio_path}")
+
+    # Normalize the model field: empty string / "default" → None so the
+    # stored meta.json doesn't carry a meaningless slug.
+    tts_model_clean = (tts_model or "").strip()
+    if not tts_model_clean or tts_model_clean == "default":
+        tts_model_clean = None
 
     from audiomat.audio import probe_wav
     info = probe_wav(src)
@@ -140,6 +151,7 @@ async def create_voice(
             channels=info.channels,
             notes=notes,
             overwrite=overwrite,
+            tts_model=tts_model_clean,
         )
     except FileExistsError as e:
         raise HTTPException(409, str(e))
@@ -149,6 +161,25 @@ async def create_voice(
             shutil.rmtree(src.parent, ignore_errors=True)
 
     return VoiceOut.from_voice(voice)
+
+
+@router.patch("/{slug}/model", response_model=VoiceOut)
+def update_voice_model(slug: str, req: VoiceModelRequest):
+    """Change which TTS model a voice points at. Cheap operation: just
+    rewrites meta.json. Doesn't invalidate any per-chapter cache — the
+    manifest signature already includes voice slug + params (see
+    ProjectRenderer._params_signature) so a model swap will trigger
+    re-synth on next render automatically."""
+    target = PATHS.voice_dir(slug)
+    if not (target / "meta.json").exists():
+        raise HTTPException(404, f"voice not found: {slug}")
+    v = Voice.load(target)
+    tts_model_clean = (req.tts_model or "").strip()
+    if not tts_model_clean or tts_model_clean == "default":
+        tts_model_clean = None
+    v.tts_model = tts_model_clean
+    v.save()
+    return VoiceOut.from_voice(v)
 
 
 @router.get("/{slug}", response_model=VoiceOut)

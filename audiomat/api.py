@@ -27,7 +27,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import asyncio
 
-from audiomat.routers import chapters, preview, projects, render, system, voices
+from audiomat.routers import (
+    chapters,
+    models,
+    preview,
+    projects,
+    render,
+    settings,
+    system,
+    voices,
+)
 from audiomat.state import PATHS, clear_tts, idle_unload_loop
 
 
@@ -72,6 +81,8 @@ app.add_middleware(
 # must come before {slug} catchalls — see voices.py / preview.py), but
 # inclusion order across routers does not.
 app.include_router(system.router)
+app.include_router(settings.router)
+app.include_router(models.router)
 app.include_router(voices.router)
 app.include_router(projects.router)
 app.include_router(preview.router)

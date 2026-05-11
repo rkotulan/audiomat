@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from audiomat.model_registry import TTSModel
 from audiomat.project import Project
 from audiomat.state import dataclass_to_dict
 from audiomat.voice import Voice
@@ -29,6 +30,7 @@ class VoiceOut(BaseModel):
     transcript_chars: int
     notes: str
     created: str
+    tts_model: str | None = None     # registry slug, None = stock default
 
     @classmethod
     def from_voice(cls, v: Voice) -> "VoiceOut":
@@ -36,13 +38,19 @@ class VoiceOut(BaseModel):
             name=v.name, name_slug=v.name_slug,
             duration_s=v.duration_s, sample_rate=v.sample_rate,
             channels=v.channels, transcript_chars=v.transcript_chars,
-            notes=v.notes, created=v.created,
+            notes=v.notes, created=v.created, tts_model=v.tts_model,
         )
 
 
 class TranscribeRequest(BaseModel):
     audio_path: str       # path produced by /api/voices/draft-upload
     language: str = "cs"
+
+
+class VoiceModelRequest(BaseModel):
+    """PATCH /voices/{slug}/model body. ``None`` / empty / "default"
+    resets to the stock OmniVoice model."""
+    tts_model: str | None = None
 
 
 # ----------------------------------------------------------------------------
@@ -114,3 +122,72 @@ class ModelStatusOut(BaseModel):
     cache_target_bytes: int
     percent: float
     message: str | None = None
+    # Display name of the model that's currently loading / loaded. Lets
+    # SystemBanner say "Načítám Ježková v1…" instead of just "TTS model".
+    # None when no model is loaded or loading.
+    active_model: str | None = None
+
+
+# ----------------------------------------------------------------------------
+# TTS model registry schemas
+# ----------------------------------------------------------------------------
+
+
+class ModelOut(BaseModel):
+    name: str
+    name_slug: str
+    source_type: Literal["local", "hf"]
+    source_ref: str
+    hf_revision: str | None = None
+    size_bytes: int
+    notes: str
+    created: str
+
+    @classmethod
+    def from_model(cls, m: TTSModel) -> "ModelOut":
+        return cls(
+            name=m.name, name_slug=m.name_slug,
+            source_type=m.source_type, source_ref=m.source_ref,
+            hf_revision=m.hf_revision, size_bytes=m.size_bytes,
+            notes=m.notes, created=m.created,
+        )
+
+
+class RegisterLocalModelRequest(BaseModel):
+    """POST /api/models body. ``src_dir`` must be a path that the
+    container can read (typically a bind-mounted host directory under
+    /data/uploads/ or similar)."""
+    name: str
+    src_dir: str
+    notes: str = ""
+    overwrite: bool = False
+
+
+class RegisterHFModelRequest(BaseModel):
+    """POST /api/models/from-hf body. ``token`` overrides whatever is
+    stored in secrets.json for this one call — useful for testing a
+    token before persisting it."""
+    name: str
+    repo_id: str
+    revision: str | None = None
+    token: str | None = None
+    notes: str = ""
+    overwrite: bool = False
+
+
+# ----------------------------------------------------------------------------
+# Settings schemas
+# ----------------------------------------------------------------------------
+
+
+class HFTokenStatusOut(BaseModel):
+    """GET /api/settings/hf response. The token itself is never sent
+    back; only whether one is configured and where it came from."""
+    has_token: bool
+    source: Literal["env", "secrets_file"] | None = None
+
+
+class HFTokenRequest(BaseModel):
+    """PUT /api/settings/hf body. Empty / null token clears the stored
+    value (use DELETE for the same effect)."""
+    token: str | None = None

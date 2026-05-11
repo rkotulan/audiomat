@@ -160,6 +160,30 @@ def peek_all_tts() -> list[OmniVoiceTTS]:
     return list(_TTS_INSTANCES.values())
 
 
+def get_tts_for_voice(voice) -> OmniVoiceTTS:  # type: ignore[no-untyped-def]
+    """Resolve a voice's ``tts_model`` field through the model registry
+    and return the matching TTS instance. Fall back to stock OmniVoice
+    if the slug is None / empty / "default" — or if the registered slug
+    has been deleted since the voice was created (graceful degradation:
+    user loses fine-tune-specific quality but renders still work).
+    """
+    from audiomat.model_registry import resolve_model_target
+    tts_model = getattr(voice, "tts_model", None)
+    try:
+        target, revision = resolve_model_target(PATHS.models_root, tts_model)
+    except KeyError:
+        # Registered model went missing — log + fall back to stock so
+        # the user isn't stuck staring at an error on a render they
+        # didn't expect to break.
+        import logging
+        logging.getLogger("audiomat.state").warning(
+            "voice %r references missing tts_model %r — falling back to stock",
+            getattr(voice, "name_slug", "?"), tts_model,
+        )
+        target, revision = resolve_model_target(PATHS.models_root, None)
+    return get_tts(target=target, revision=revision)
+
+
 def clear_tts(target: str | None = None) -> None:
     """Unload one or all instances.
 

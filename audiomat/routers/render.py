@@ -27,7 +27,7 @@ from audiomat.state import (
     RENDER_QUEUES,
     RENDER_THREADS,
     book_blocks,
-    get_tts,
+    get_tts_for_voice,
     load_project_or_404,
 )
 from audiomat.voice import Voice
@@ -63,7 +63,7 @@ async def start_render(
     RENDER_CANCEL[slug] = cancel_event
     loop = asyncio.get_running_loop()
 
-    tts = get_tts()
+    tts = get_tts_for_voice(voice)
     renderer = ProjectRenderer(proj, voice, tts, blocks)
     indices = req.indices
 

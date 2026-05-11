@@ -25,7 +25,7 @@ from audiomat.routers.projects import is_metadata_block as _is_metadata_block
 from audiomat.schemas import PreviewCustomRequest
 from audiomat.state import (
     PATHS,
-    get_tts,
+    get_tts_for_voice,
     load_project_or_404,
     wav_duration_s,
 )
@@ -164,7 +164,7 @@ def preview_matrix(slug: str):
     total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
 
     def event_gen():
-        tts = get_tts()
+        tts = get_tts_for_voice(voice)
         tts.load()
         sr = tts.sample_rate
 
@@ -289,7 +289,7 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
         return {**base, "cached": True, "gen_seconds": 0.0,
                 "duration_s": wav_duration_s(wav_path)}
 
-    tts = get_tts()
+    tts = get_tts_for_voice(voice)
     tts.load()
     sr = tts.sample_rate
 
