@@ -5,7 +5,7 @@ Convert eBooks into audiobooks with cloned voices, locally and offline.
 > "Vlož knihu, vypadne audiokniha." — feed in a book, get an audiobook out.
 
 **Status:** alpha — full pipeline working end-to-end, actively used for
-personal Czech audiobook conversion. Public release pending.
+personal Czech audiobook conversion. Issues + PRs welcome.
 
 ![audiomat — Render tab mid-job on Skleněný muž](docs/screenshots/audiomat_01.png)
 
