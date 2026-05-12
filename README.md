@@ -69,7 +69,7 @@ narrative content; speed is end-to-end on a single RTX 5070 (12 GB).
 <td>Apache-2.0</td>
 <td>★★★★☆</td>
 <td>★★★★☆</td>
-<td><a href="samples/sample%20-%20omnivoice.mp3">▶ MP3 (1.1 MB)</a></td>
+<td><audio controls preload="none" src="https://github.com/user-attachments/files/27622597/sample.-.omnivoice.mp3"></audio></td>
 </tr>
 
 <tr>
@@ -79,7 +79,7 @@ narrative content; speed is end-to-end on a single RTX 5070 (12 GB).
 <td>Fish Audio Research License</td>
 <td>★☆☆☆☆</td>
 <td>★★★★☆</td>
-<td><a href="samples/sample%20-%20s2pro.mp3">▶ MP3 (0.9 MB)</a></td>
+<td><audio controls preload="none" src="https://github.com/user-attachments/files/27622598/sample.-.s2pro.mp3"></audio></td>
 </tr>
 
 <tr>
@@ -89,7 +89,7 @@ narrative content; speed is end-to-end on a single RTX 5070 (12 GB).
 <td>MIT + CC0</td>
 <td>★★★★☆</td>
 <td>★★★★☆</td>
-<td><a href="samples/sample%20-%20chatterbox.mp3">▶ MP3 (1.1 MB)</a></td>
+<td><audio controls preload="none" src="https://github.com/user-attachments/files/27622596/sample.-.chatterbox.mp3"></audio></td>
 </tr>
 
 <tr>
@@ -99,7 +99,7 @@ narrative content; speed is end-to-end on a single RTX 5070 (12 GB).
 <td>CPML</td>
 <td>★★★☆☆</td>
 <td>★★☆☆☆</td>
-<td><a href="samples/sample%20-%20xtts2.mp3">▶ MP3 (1.2 MB)</a></td>
+<td><audio controls preload="none" src="https://github.com/user-attachments/files/27622600/sample.-.xtts2.mp3"></audio></td>
 </tr>
 
 <tr>
@@ -109,7 +109,7 @@ narrative content; speed is end-to-end on a single RTX 5070 (12 GB).
 <td>Commercial SaaS</td>
 <td>★★★★★</td>
 <td>★★★★★</td>
-<td><a href="samples/sample%20-%20topmediai.mp3">▶ MP3 (1.0 MB)</a></td>
+<td><audio controls preload="none" src="https://github.com/user-attachments/files/27622599/sample.-.topmediai.mp3"></audio></td>
 </tr>
 
 </tbody>
