@@ -7,6 +7,8 @@ Convert eBooks into audiobooks with cloned voices, locally and offline.
 **Status:** alpha — full pipeline working end-to-end, actively used for
 personal Czech audiobook conversion. Public release pending.
 
+![audiomat — Render tab mid-job on Skleněný muž](docs/screenshots/audiomat_01.png)
+
 ## What audiomat is
 
 A focused, GPU-accelerated audiobook generator built around
