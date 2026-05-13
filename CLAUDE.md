@@ -1,10 +1,10 @@
 # audiomat — Czech-first audiobook TTS app
 
 Public app: turn EPUB/TXT + 5–10 s voice clip → M4B audiobook with cloned
-voice. GPU-only, OmniVoice fixed, FastAPI + React stack. Predecessor /
-research dir is `C:\Dev\skleneny-muz-tts\` (legacy CZ audiobook project,
-not a git repo) — pipeline logic was developed there first and ported
-here.
+voice. GPU-only, OmniVoice fixed, FastAPI + React stack. Sister R&D /
+playground dir is `C:\Dev\audiomat-lab\` (not a git repo) — pipeline
+logic was developed there first and ported here. See "Sister project"
+at the bottom for current contents.
 
 ## Quick status (2026-05-10)
 
@@ -279,18 +279,42 @@ audiomat.<module>` sanity checks during development.
   (default UTF-16 LE BOM breaks downstream readers). Set
   `$env:PYTHONIOENCODING = "utf-8"` for stdout/stderr.
 
-## Sister project (predecessor)
+## Sister project — audiomat-lab
 
-`C:\Dev\skleneny-muz-tts\` — original Czech audiobook project. Has its
-own CLAUDE.md with full Stage 1–3 history (S2.cpp Vulkan build,
-Chatterbox-CZ evaluation, OmniVoice param A/B). Contains production
-M4B `Skleneny_muz_omnivoice.m4b` (354 MB, 12:47:31), per-chapter cache
-in `chapter_outputs_omnivoice_step48_gs2/`, all original render scripts
-(`render_omnivoice.py`, etc), reference clips in `reference/`. Not a
-git repo. Reference for pipeline logic + license-free experimental
-artifacts.
+`C:\Dev\audiomat-lab\` (renamed from `skleneny-muz-tts/` on 2026-05-13).
+Not a git repo. R&D playground: OmniVoice scripts that predate the
+audiomat package, A/B sets, reference clips, finished personal renders.
+
+**Tree (post-cleanup):**
+```
+audiomat-lab/
+├── experiments/                      (A/B tests + sanity runs)
+│   └── gold_param_ab_and_clone_fidelity/   ← Ježková A/B + 35 s clone test
+├── sources/skleneny_muz/             (chapters_json/, chapters_txt/)
+├── scripts/                          (render_omnivoice.py + tests + helpers;
+│                                      render_s2.py kept as helper module
+│                                      only — render_omnivoice imports
+│                                      inject_header_pause, make_chunks,
+│                                      sanitize_stem, _ensure_silence_wav,
+│                                      wav_duration_s from it)
+└── logs/omnivoice/
+```
+
+**Voice reference archive (separate dir):**
+`C:\Dev\audiomat-voices\Jitka Ježková\` holds the master 93 s
+`reference_v2.wav` + 7 length variants (10s production, 20s, 21s, 30s,
+35s gold A/B, 8s v3). The audiomat app's voice library at
+`~/audiomat/voices/Jitka_Jezkova/` is the selected production copy of
+these.
+
+**Removed 2026-05-13 (~60 GB freed):** S2 stack (s2.cpp, all
+`s2-pro-*.gguf` checkpoints, full chunk cache, test outputs, S2-only
+scripts), Chatterbox stack (`t3_cs.safetensors`, `chatterbox_git/`,
+test outputs, Chatterbox scripts), XTTS-v2 baseline scripts, all
+production M4Bs (user has them archived on flash), 18.9 GB OmniVoice
+production chunk cache.
 
 When user says "pokračujeme s audiomat" / "stage 4" → default working
-dir is here (`C:\Dev\audiomat\`). When user says "skleněný muž" or
-references a script like `render_omnivoice.py` directly → that's the
-predecessor.
+dir is here (`C:\Dev\audiomat\`). When user says "skleněný muž",
+references the predecessor pipeline, or hands a script like
+`render_omnivoice.py` directly → `C:\Dev\audiomat-lab\` is the right dir.

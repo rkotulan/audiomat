@@ -95,6 +95,7 @@ to `/data` in this image).
 | tag | description |
 |---|---|
 | `latest` | most recent release |
+| `0.2.0` | voice picker matrix, long-source clip extractor, clone validator |
 | `0.1.0` | pinned first public release |
 
 ## Links
