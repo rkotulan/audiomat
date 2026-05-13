@@ -1,18 +1,23 @@
 // Tiny fetch wrapper for the audiomat FastAPI backend.
 // Vite proxies /api → :8000 in dev, so we can use relative paths everywhere.
 import type {
+  AnalyzeResult,
   ChapterText,
   ChaptersResponse,
   CustomPreviewResult,
+  DraftUploadLongResult,
   DraftUploadResult,
   HFRepoInfo,
   HFTokenStatus,
   ModelDownloadEvent,
   PreviewMatrix,
+  PreviewVoicesMatrix,
   Project,
   ProgressEvent,
+  StagedVoicePreview,
   TTSModel,
   Voice,
+  VoicePreviewCell,
 } from './types'
 
 const BASE = '/api'
@@ -43,6 +48,65 @@ export async function draftUploadVoice(file: File): Promise<DraftUploadResult> {
 
 export const draftAudioUrl = (path: string) =>
   `${BASE}/voices/draft-audio?path=${encodeURIComponent(path)}`
+
+// ---- long-source voice picker (multi-step wizard) ----
+
+export async function draftUploadVoiceLong(file: File): Promise<DraftUploadLongResult> {
+  const fd = new FormData()
+  fd.append('audio', file)
+  return fetch(`${BASE}/voices/draft-upload-long`, { method: 'POST', body: fd }).then(
+    ok<DraftUploadLongResult>,
+  )
+}
+
+export async function analyzeVoiceSource(args: {
+  audio_path: string
+  chapter_start_s?: number | null
+  chapter_end_s?: number | null
+  analyze_minutes?: number
+}): Promise<AnalyzeResult> {
+  return fetch(`${BASE}/voices/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      audio_path: args.audio_path,
+      chapter_start_s: args.chapter_start_s ?? null,
+      chapter_end_s: args.chapter_end_s ?? null,
+      analyze_minutes: args.analyze_minutes ?? 10,
+    }),
+  }).then(ok<AnalyzeResult>)
+}
+
+export async function previewStagedVoice(args: {
+  audio_path: string
+  transcript: string
+  sample_text: string
+  language?: string
+}): Promise<StagedVoicePreview> {
+  return fetch(`${BASE}/voices/preview-staged`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      audio_path: args.audio_path,
+      transcript: args.transcript,
+      sample_text: args.sample_text,
+      language: args.language ?? 'cs',
+    }),
+  }).then(ok<StagedVoicePreview>)
+}
+
+export async function extractVoiceWindow(args: {
+  audio_path: string
+  analyzed_start_s: number
+  start_s: number
+  end_s: number
+}): Promise<DraftUploadResult> {
+  return fetch(`${BASE}/voices/extract-window`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  }).then(ok<DraftUploadResult>)
+}
 
 export async function autoTranscribe(audio_path: string, language = 'cs') {
   return fetch(`${BASE}/voices/auto-transcribe`, {
@@ -77,8 +141,45 @@ export const updateVoiceModel = (slug: string, tts_model: string | null) =>
     body: JSON.stringify({ tts_model }),
   }).then(ok<Voice>)
 
-export const deleteVoice = (slug: string) =>
-  fetch(`${BASE}/voices/${slug}`, { method: 'DELETE' }).then(ok)
+export interface DeleteVoiceResult {
+  deleted: string
+  replacement: string | null
+  replaced_in: string[]
+}
+
+export interface VoiceInUseError {
+  status: 409
+  message: string
+  referencing_projects: { slug: string; name: string }[]
+}
+
+/** Delete a voice. When ``replacement`` is provided the server atomically
+ *  reassigns every referencing project to it before deletion.
+ *
+ *  When the voice is in use and no replacement is given, the server
+ *  returns a structured 409 — we surface it as a typed
+ *  ``VoiceInUseError`` so the UI can prompt the user to pick a swap
+ *  target instead of just showing a raw error message. */
+export async function deleteVoice(
+  slug: string,
+  replacement?: string,
+): Promise<DeleteVoiceResult> {
+  const qs = replacement ? `?replacement=${encodeURIComponent(replacement)}` : ''
+  const r = await fetch(`${BASE}/voices/${slug}${qs}`, { method: 'DELETE' })
+  if (r.status === 409) {
+    const body = await r.json().catch(() => ({}))
+    const detail = body?.detail ?? {}
+    const err: VoiceInUseError = {
+      status: 409,
+      message: detail.message ?? 'voice is in use',
+      referencing_projects: Array.isArray(detail.referencing_projects)
+        ? detail.referencing_projects
+        : [],
+    }
+    throw err
+  }
+  return ok<DeleteVoiceResult>(r)
+}
 
 export const voiceAudioUrl = (slug: string) => `${BASE}/voices/${slug}/audio`
 
@@ -204,6 +305,26 @@ export const validateHFToken = (token: string): Promise<{ valid: boolean; repo_c
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token }),
   }).then(ok<{ valid: boolean; repo_count: number }>)
+
+export interface VoiceValidationText {
+  text: string
+  is_default: boolean
+}
+
+export const getVoiceValidationText = (): Promise<VoiceValidationText> =>
+  fetch(`${BASE}/settings/voice-validation-text`).then(ok<VoiceValidationText>)
+
+export const setVoiceValidationText = (text: string): Promise<VoiceValidationText> =>
+  fetch(`${BASE}/settings/voice-validation-text`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  }).then(ok<VoiceValidationText>)
+
+export const resetVoiceValidationText = (): Promise<VoiceValidationText> =>
+  fetch(`${BASE}/settings/voice-validation-text`, { method: 'DELETE' }).then(
+    ok<VoiceValidationText>,
+  )
 
 // ---- projects ----
 
@@ -335,6 +456,84 @@ function parseSSE(block: string): { event: string; data: any } | null {
     return null
   }
 }
+
+export interface PreviewVoicesEvents {
+  onStarted?: (header: Omit<PreviewVoicesMatrix, 'voices'> & { total: number }) => void
+  onCellDone?: (index: number, cell: VoicePreviewCell) => void
+  onError?: (message: string) => void
+}
+
+/** Stream the voice-picker matrix. Backend renders the project's sample
+ *  text once per requested voice slug; cells stream in via SSE so the
+ *  UI shows progress instead of a blocked spinner. Resolves with the
+ *  full matrix on the ``complete`` event. */
+export async function previewVoices(
+  slug: string,
+  voiceSlugs: string[],
+  events: PreviewVoicesEvents = {},
+): Promise<PreviewVoicesMatrix> {
+  const r = await fetch(`${BASE}/projects/${slug}/preview-voices`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voice_slugs: voiceSlugs }),
+  })
+  if (!r.ok) {
+    const detail = await r.text().catch(() => r.statusText)
+    throw new Error(`${r.status} ${r.statusText}: ${detail}`)
+  }
+  if (!r.body) throw new Error('preview-voices: no response body')
+
+  const reader = r.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let header: (Omit<PreviewVoicesMatrix, 'voices'> & { total: number }) | null = null
+  const cells: VoicePreviewCell[] = []
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+    let sep
+    while ((sep = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, sep)
+      buf = buf.slice(sep + 2)
+      const evt = parseSSE(block)
+      if (!evt) continue
+      if (evt.event === 'started') {
+        header = evt.data
+        events.onStarted?.(evt.data)
+      } else if (evt.event === 'cell_done') {
+        cells[evt.data.index] = evt.data.voice
+        events.onCellDone?.(evt.data.index, evt.data.voice)
+      } else if (evt.event === 'error') {
+        const msg = evt.data?.message ?? 'unknown error'
+        events.onError?.(msg)
+        throw new Error(msg)
+      } else if (evt.event === 'complete') {
+        if (!header) throw new Error('preview-voices: complete without started')
+        return {
+          sample_text: header.sample_text,
+          sample_chars: header.sample_chars,
+          sample_block_index: header.sample_block_index,
+          sample_block_total: header.sample_block_total,
+          total_book_chars: header.total_book_chars,
+          num_step: header.num_step,
+          guidance_scale: header.guidance_scale,
+          speed: header.speed,
+          voices: evt.data.voices,
+        }
+      }
+    }
+  }
+  throw new Error('preview-voices: stream ended without complete event')
+}
+
+export const updateProjectVoice = (slug: string, voice_slug: string) =>
+  fetch(`${BASE}/projects/${slug}/voice`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voice_slug }),
+  }).then(ok<Project>)
 
 export const previewCustom = (
   slug: string,

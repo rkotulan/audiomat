@@ -82,6 +82,157 @@ def probe_wav(path: Path | str) -> AudioInfo:
     return AudioInfo(duration_s=duration, sample_rate=rate, channels=channels)
 
 
+@dataclass
+class ChapterInfo:
+    """One chapter from a chaptered container (m4b, mka, …)."""
+    index: int                # 0-based
+    title: str
+    start_s: float
+    end_s: float
+
+    @property
+    def duration_s(self) -> float:
+        return self.end_s - self.start_s
+
+
+def probe_chapters(in_path: Path | str) -> list[ChapterInfo]:
+    """Read chapter markers from an audiobook container. Returns ``[]``
+    if the file has no chapters or isn't a container that supports
+    them (mp3, wav, etc.).
+
+    We don't ship ffprobe (imageio-ffmpeg bundles only ffmpeg), so we
+    use the ``-f ffmetadata`` muxer to dump chapters into a parseable
+    text stream and read them back.
+    """
+    in_path = Path(in_path)
+    if not in_path.exists():
+        raise FileNotFoundError(in_path)
+    cmd = [
+        ffmpeg_path(), "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(in_path),
+        "-f", "ffmetadata", "-",
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace")
+    # Some containers (mp3 without ID3 chapters) make ffmpeg exit 0 with
+    # zero chapters in the stream; others may exit non-zero. Either way
+    # if there's no chapter block we just return [].
+    if res.returncode != 0 and "[CHAPTER]" not in (res.stdout or ""):
+        return []
+    return _parse_ffmetadata_chapters(res.stdout or "")
+
+
+def _parse_ffmetadata_chapters(text: str) -> list[ChapterInfo]:
+    """Parse ffmpeg's ``ffmetadata`` text output into ``ChapterInfo``s.
+
+    Each chapter block looks like::
+
+        [CHAPTER]
+        TIMEBASE=1/1000
+        START=0
+        END=600000
+        title=Chapter 1
+    """
+    out: list[ChapterInfo] = []
+    cur: dict[str, str] = {}
+    in_chapter = False
+    for line in text.splitlines():
+        line = line.strip()
+        if line == "[CHAPTER]":
+            if in_chapter and cur:
+                out.append(_finalize_chapter(cur, len(out)))
+            cur = {}
+            in_chapter = True
+            continue
+        if line.startswith("[") and line.endswith("]") and in_chapter:
+            # Some other section started — flush current chapter.
+            out.append(_finalize_chapter(cur, len(out)))
+            cur = {}
+            in_chapter = False
+            continue
+        if not in_chapter or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        cur[key.strip().lower()] = val.strip()
+    if in_chapter and cur:
+        out.append(_finalize_chapter(cur, len(out)))
+    return [c for c in out if c is not None]
+
+
+def _finalize_chapter(cur: dict[str, str], index: int) -> ChapterInfo:
+    """Convert one parsed [CHAPTER] block into a ChapterInfo. Defaults
+    to a numeric title when the source didn't supply one."""
+    timebase = cur.get("timebase", "1/1000")
+    try:
+        num, den = timebase.split("/")
+        scale = float(num) / float(den)
+    except (ValueError, ZeroDivisionError):
+        scale = 1.0 / 1000.0
+    try:
+        start = float(cur.get("start", "0")) * scale
+        end = float(cur.get("end", "0")) * scale
+    except ValueError:
+        start, end = 0.0, 0.0
+    title = cur.get("title", "").strip() or f"Chapter {index + 1}"
+    return ChapterInfo(index=index, title=title, start_s=start, end_s=end)
+
+
+def extract_audio_window(
+    in_path: Path | str,
+    out_path: Path | str,
+    start_s: float,
+    end_s: float | None,
+    sample_rate: int = VOICE_TARGET_RATE,
+    channels: int = VOICE_TARGET_CHANNELS,
+) -> AudioInfo:
+    """Trim ``[start_s, end_s]`` out of any audio source and write a
+    24 kHz mono 16-bit WAV. ``end_s=None`` runs to EOF.
+
+    Uses ``-ss`` BEFORE ``-i`` for a fast seek (container index lookup)
+    and ``-to`` AFTER ``-i`` for an exact end cut. Together this is
+    accurate within ~1 frame even on long m4b files.
+    """
+    in_path = Path(in_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not in_path.exists():
+        raise FileNotFoundError(in_path)
+
+    cmd = [
+        ffmpeg_path(), "-y", "-hide_banner", "-loglevel", "error",
+        "-ss", f"{max(0.0, start_s):.3f}",
+        "-i", str(in_path),
+    ]
+    if end_s is not None:
+        # -t (duration), measured from the post-seek start. Avoids
+        # double-counting when -ss is also pre-input.
+        cmd += ["-t", f"{max(0.001, end_s - start_s):.3f}"]
+    cmd += [
+        "-ac", str(channels),
+        "-ar", str(sample_rate),
+        "-sample_fmt", "s16",
+        "-c:a", "pcm_s16le",
+        str(out_path),
+    ]
+    _run(cmd, f"extract_audio_window {in_path.name} [{start_s}-{end_s}]")
+    return probe_wav(out_path)
+
+
+def extract_first_n_minutes(
+    in_path: Path | str,
+    out_path: Path | str,
+    minutes: float,
+    sample_rate: int = VOICE_TARGET_RATE,
+    channels: int = VOICE_TARGET_CHANNELS,
+) -> AudioInfo:
+    """Convenience: extract ``[0, minutes*60]`` as 24 kHz mono WAV."""
+    return extract_audio_window(
+        in_path, out_path,
+        start_s=0.0, end_s=minutes * 60.0,
+        sample_rate=sample_rate, channels=channels,
+    )
+
+
 def convert_voice_ref(
     in_path: Path | str,
     out_path: Path | str,

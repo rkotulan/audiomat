@@ -53,6 +53,111 @@ class VoiceModelRequest(BaseModel):
     tts_model: str | None = None
 
 
+# --- Long-source voice picker (multi-step wizard) ---
+
+
+class ChapterOut(BaseModel):
+    """One chapter from a chaptered container (m4b). Returned by
+    /api/voices/draft-upload-long when the upload is an audiobook with
+    chapter markers. UI uses this to offer "analyze a specific chapter"
+    instead of the default "first 10 minutes" of the file."""
+    index: int
+    title: str
+    start_s: float
+    end_s: float
+    duration_s: float
+
+
+class DraftUploadLongOut(BaseModel):
+    """Response of /api/voices/draft-upload-long. Same shape as the
+    short-form draft-upload but with no duration ceiling, and with an
+    optional chapter list when the source has them.
+
+    ``audio_path`` is the converted 24 kHz mono WAV of the WHOLE source
+    (we keep it for later /extract-window calls that need to seek into
+    arbitrary spots of the original)."""
+    audio_path: str
+    duration_s: float
+    sample_rate: int
+    channels: int
+    chapters: list[ChapterOut]      # empty list when source has none
+
+
+class AnalyzeRequest(BaseModel):
+    """POST /api/voices/analyze body. Either analyze the first
+    ``analyze_minutes`` of the source, or — if ``chapter_index`` is set
+    — analyze that single chapter instead."""
+    audio_path: str
+    chapter_start_s: float | None = None    # set together with chapter_end_s
+    chapter_end_s: float | None = None
+    analyze_minutes: float = 10.0
+
+
+class CandidateOut(BaseModel):
+    """One scored candidate window. ``preview_path`` is a pre-trimmed
+    WAV in the same staging tempdir, served via /draft-audio so the UI
+    can play each candidate without re-trimming on every click."""
+    index: int
+    start_s: float                  # relative to the analyzed slice
+    end_s: float
+    duration_s: float
+    score: float                    # 0-100 composite
+    preview_path: str
+    breakdown: dict
+
+
+class AnalyzeOut(BaseModel):
+    candidates: list[CandidateOut]
+    analyzed_start_s: float          # offset of the analyzed slice within the source
+    analyzed_end_s: float
+    full_audio_path: str             # echoes the request, for chained calls
+
+
+class ExtractWindowRequest(BaseModel):
+    """POST /api/voices/extract-window body. Trim ``[start_s, end_s]``
+    out of the (already-converted) staged source and return a path
+    that can be passed to POST /api/voices to commit the voice.
+
+    Times are in the analyzed slice's coordinate system — the backend
+    adds back the slice offset before cutting from the full WAV."""
+    audio_path: str                  # full converted WAV path
+    analyzed_start_s: float          # slice offset (echo from AnalyzeOut)
+    start_s: float
+    end_s: float
+
+
+class ExtractWindowOut(BaseModel):
+    """Response shape matches DraftUploadResult so the front-end can
+    feed it straight into the existing /api/voices commit flow."""
+    audio_path: str
+    duration_s: float
+    sample_rate: int
+    channels: int
+
+
+class PreviewStagedVoiceRequest(BaseModel):
+    """POST /api/voices/preview-staged body. Run a single TTS generation
+    against a not-yet-saved voice (still living in an
+    ``audiomat_voice_*`` tempdir) so the user can validate the clone
+    quality before committing to the library.
+
+    Uses the production OmniVoice params (num_step=48, gs=2.0, speed=1.0)
+    — what the eventual project render will use by default — so what
+    the user hears here matches what they'll get."""
+    audio_path: str                 # staged voice.wav inside tempdir
+    transcript: str                 # matching ref text (probably user-edited)
+    sample_text: str                # what to render
+    language: str = "cs"
+
+
+class PreviewStagedVoiceOut(BaseModel):
+    """Result of a staged-voice TTS preview. Audio served via the existing
+    /api/voices/draft-audio endpoint (same staging-area protection)."""
+    audio_path: str
+    duration_s: float
+    gen_seconds: float
+
+
 # ----------------------------------------------------------------------------
 # Project schemas
 # ----------------------------------------------------------------------------
@@ -100,6 +205,21 @@ class RenderRequest(BaseModel):
     """Optional body for POST /render. ``indices`` is a list of 1-based
     renderable chapter indices; if absent/empty the whole book renders."""
     indices: list[int] | None = None
+
+
+class PreviewVoicesRequest(BaseModel):
+    """POST /api/projects/{slug}/preview-voices body. Renders the same
+    sample text from the project at each voice — params come from the
+    project (so cells vary only by voice). Cap at 4 to keep the GPU
+    bounded; the UI enforces the same cap on its checklist."""
+    voice_slugs: list[str]
+
+
+class ProjectVoiceRequest(BaseModel):
+    """PATCH /api/projects/{slug}/voice body. Voice swap invalidates the
+    chunk cache automatically via the manifest signature (which includes
+    the voice slug — see ``ProjectRenderer._params_signature``)."""
+    voice_slug: str
 
 
 class PreviewCustomRequest(BaseModel):
@@ -197,3 +317,18 @@ class HFTokenRequest(BaseModel):
     """PUT /api/settings/hf body. Empty / null token clears the stored
     value (use DELETE for the same effect)."""
     token: str | None = None
+
+
+class VoiceValidationTextOut(BaseModel):
+    """GET /api/settings/voice-validation-text response. ``is_default``
+    lets the UI show a quiet "(reset to default)" affordance only when
+    the user actually has an override stored."""
+    text: str
+    is_default: bool
+
+
+class VoiceValidationTextRequest(BaseModel):
+    """PUT /api/settings/voice-validation-text body. Server-side store
+    persists across uploads + browsers (single library = single value).
+    Use DELETE to clear the override."""
+    text: str

@@ -22,7 +22,7 @@ from audiomat.num2text import normalize_lang
 from audiomat.project import Project
 from audiomat.pronunciations import apply_pronunciations, load_pronunciations
 from audiomat.routers.projects import is_metadata_block as _is_metadata_block
-from audiomat.schemas import PreviewCustomRequest
+from audiomat.schemas import PreviewCustomRequest, PreviewVoicesRequest
 from audiomat.state import (
     PATHS,
     get_tts_for_voice,
@@ -297,6 +297,161 @@ def preview_matrix(slug: str):
         yield {
             "event": "complete",
             "data": _json.dumps({"variants": results}),
+        }
+
+    return EventSourceResponse(event_gen())
+
+
+@router.post("/{slug}/preview-voices")
+def preview_voices(slug: str, req: PreviewVoicesRequest):
+    """Render the project's sample text with each requested voice and
+    stream cell-by-cell progress as SSE.
+
+    Mirrors :func:`preview_matrix`'s shape but iterates over voices
+    instead of param presets — params are taken from ``project.params``
+    so cells differ only by voice. Cache layout is shared with the
+    quality matrix (same ``previews/`` directory + ``_gen_times.json``
+    sidecar); cell filenames are ``voice_<slug>_<hash>.wav`` so they
+    don't collide with quality-matrix cells (``<label>_<hash>.wav``).
+
+    No upper cap on count — the UI's smart default seeds a small set,
+    but users can opt to compare all voices in the library if they
+    want. Voices that resolve to different fine-tunes (per the model
+    registry) reuse the per-target TTS singleton, so repeated voices
+    on the same fine-tune don't trigger extra model loads.
+    """
+    if len(req.voice_slugs) < 1:
+        raise HTTPException(400, "voice_slugs must contain at least one slug")
+    if len(set(req.voice_slugs)) != len(req.voice_slugs):
+        raise HTTPException(400, "voice_slugs must be unique")
+
+    proj = load_project_or_404(slug)
+    if not proj.book_path.exists():
+        raise HTTPException(400, f"book file missing: {proj.book_path}")
+
+    voices: list[Voice] = []
+    for vs in req.voice_slugs:
+        vdir = PATHS.voice_dir(vs)
+        if not (vdir / "meta.json").exists():
+            raise HTTPException(404, f"voice not found: {vs}")
+        voices.append(Voice.load(vdir))
+
+    blocks = _parse_blocks(proj)
+    picked = _pick_sample_text(blocks, blocks_skipped=proj.book.blocks_skipped)
+    if picked is None:
+        raise HTTPException(400, "no block ≥ 300 chars found in book — preview needs prose")
+    sample_text, sample_block_index = picked
+
+    previews_dir = proj.dir / "previews"
+    previews_dir.mkdir(exist_ok=True)
+    language = normalize_lang(proj.book.language or "cs")
+    pronunciations = load_pronunciations(proj.dir)
+    clean = prepare_for_tts(apply_pronunciations(sample_text, pronunciations), lang=language)
+    total_book_chars = _total_book_chars(blocks, proj.book.blocks_skipped)
+
+    p = proj.params
+    gen_times_path = previews_dir / "_gen_times.json"
+    gen_times: dict[str, float] = {}
+    if gen_times_path.exists():
+        try:
+            gen_times = _json.loads(gen_times_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            gen_times = {}
+
+    def event_gen():
+        yield {
+            "event": "started",
+            "data": _json.dumps({
+                "total": len(voices),
+                "sample_text": clean,
+                "sample_chars": len(clean),
+                "sample_block_index": sample_block_index,
+                "sample_block_total": len(blocks),
+                "total_book_chars": total_book_chars,
+                # Echo the params so the UI can label "rendered at 48/2.0/1.0"
+                # in case the user later changes them and wonders why the
+                # cached samples sound different from a fresh quality preview.
+                "num_step": p.num_step,
+                "guidance_scale": p.guidance_scale,
+                "speed": p.speed,
+            }),
+        }
+
+        results: list[dict] = []
+        gen_times_dirty = False
+        for idx, voice in enumerate(voices):
+            try:
+                key_src = (
+                    f"{clean}|{p.num_step}|{p.guidance_scale}"
+                    f"|{p.speed}|{voice.name_slug}"
+                )
+                key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
+                wav_path = previews_dir / f"voice_{voice.name_slug}_{key}.wav"
+
+                if wav_path.exists() and wav_path.stat().st_size > 1024:
+                    cell = {
+                        "voice_slug": voice.name_slug,
+                        "voice_name": voice.name,
+                        "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
+                        "cached": True,
+                        "gen_seconds": float(gen_times.get(wav_path.name, 0.0)),
+                        "duration_s": wav_duration_s(wav_path),
+                    }
+                else:
+                    tts = get_tts_for_voice(voice)
+                    tts.load()
+                    sr = tts.sample_rate
+                    t0 = time.time()
+                    audios = tts._model.generate(
+                        text=clean,
+                        language=language,
+                        ref_text=voice.transcript(),
+                        ref_audio=str(voice.wav_path),
+                        num_step=p.num_step,
+                        guidance_scale=p.guidance_scale,
+                        speed=p.speed,
+                    )
+                    gen_s = time.time() - t0
+                    sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+                    gen_times[wav_path.name] = round(gen_s, 2)
+                    gen_times_dirty = True
+                    cell = {
+                        "voice_slug": voice.name_slug,
+                        "voice_name": voice.name,
+                        "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
+                        "cached": False,
+                        "gen_seconds": round(gen_s, 2),
+                        "duration_s": round(audios[0].shape[-1] / sr, 2),
+                    }
+            except Exception as e:
+                yield {
+                    "event": "error",
+                    "data": _json.dumps({
+                        "index": idx,
+                        "voice_slug": voice.name_slug,
+                        "message": str(e),
+                    }),
+                }
+                return
+
+            results.append(cell)
+            yield {
+                "event": "cell_done",
+                "data": _json.dumps({"index": idx, "voice": cell}),
+            }
+
+        if gen_times_dirty:
+            try:
+                gen_times_path.write_text(
+                    _json.dumps(gen_times, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+
+        yield {
+            "event": "complete",
+            "data": _json.dumps({"voices": results}),
         }
 
     return EventSourceResponse(event_gen())

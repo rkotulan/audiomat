@@ -68,6 +68,14 @@ class AudiomatPaths:
         host."""
         return self.library_root / "secrets.json"
 
+    @property
+    def settings_path(self) -> Path:
+        """Non-sensitive user prefs (voice validation text, etc.). Sibling
+        of secrets.json but kept separate so we don't have to think about
+        file permissions when adding new prefs. See
+        :mod:`audiomat.settings_store`."""
+        return self.library_root / "settings.json"
+
     def voice_dir(self, slug: str) -> Path:
         return self.voices_root / slug
 

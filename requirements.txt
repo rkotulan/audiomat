@@ -28,6 +28,14 @@ numpy>=2.0
 # Voice transcript helper
 faster-whisper>=1.0
 
+# Voice activity detection — used by long-source candidate finder
+# (audiomat/voice_extract.py). 9 MB silero-vad wheel + ~80 MB
+# onnxruntime. We use the ONNX backend (not torch.jit) because torch's
+# underlying fopen on Windows breaks on non-ASCII paths like
+# C:\Users\Táta\... — see voice_extract._vad_model() comment.
+silero-vad>=5.1
+onnxruntime>=1.20
+
 # Number-to-text expansion (Czech: "1959" -> "tisíc devět set padesát devět")
 num2words>=0.5
 

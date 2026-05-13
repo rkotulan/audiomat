@@ -13,9 +13,16 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from audiomat.audio import convert_voice_ref
+from audiomat.audio import (
+    convert_voice_ref, extract_audio_window, probe_chapters, probe_wav,
+)
 from audiomat.project import Project
-from audiomat.schemas import TranscribeRequest, VoiceModelRequest, VoiceOut
+from audiomat.schemas import (
+    AnalyzeOut, AnalyzeRequest, CandidateOut, ChapterOut,
+    DraftUploadLongOut, ExtractWindowOut, ExtractWindowRequest,
+    PreviewStagedVoiceOut, PreviewStagedVoiceRequest,
+    TranscribeRequest, VoiceModelRequest, VoiceOut,
+)
 from audiomat.state import PATHS
 from audiomat.voice import Voice
 
@@ -106,6 +113,260 @@ async def draft_voice_upload(audio: UploadFile = File(...)):
     }
 
 
+# ---- long-source flow (multi-step wizard) ----
+
+
+@router.post("/draft-upload-long", response_model=DraftUploadLongOut)
+async def draft_voice_upload_long(audio: UploadFile = File(...)):
+    """Upload an arbitrarily-long audio source (chapter mp3, audiobook
+    m4b, …). No 20 s ceiling — caller will narrow it down via the
+    /analyze + /extract-window flow.
+
+    We immediately convert to 24 kHz mono WAV (so subsequent analyze /
+    extract-window calls don't have to re-decode the source on every
+    request) and probe for chapter markers. Returned path lives in an
+    ``audiomat_voice_*`` tempdir; same staging area as draft-upload, so
+    the same cleanup-on-commit logic applies in POST /api/voices.
+    """
+    suffix = Path(audio.filename or "voice").suffix or ".wav"
+    tmpdir = Path(tempfile.mkdtemp(prefix="audiomat_voice_"))
+    raw_path = tmpdir / f"raw{suffix}"
+    converted_path = tmpdir / "voice_full.wav"
+
+    with raw_path.open("wb") as f:
+        shutil.copyfileobj(audio.file, f)
+
+    try:
+        info = convert_voice_ref(raw_path, converted_path)
+        chapters = probe_chapters(raw_path)
+    except Exception as e:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise HTTPException(400, f"audio conversion failed: {e}")
+    finally:
+        # Keep the original around briefly so probe_chapters can read it.
+        # (The converted WAV doesn't carry chapter markers — concat strips
+        # them — so we have to probe the original.)
+        raw_path.unlink(missing_ok=True)
+
+    return DraftUploadLongOut(
+        audio_path=str(converted_path),
+        duration_s=round(info.duration_s, 3),
+        sample_rate=info.sample_rate,
+        channels=info.channels,
+        chapters=[
+            ChapterOut(
+                index=c.index, title=c.title,
+                start_s=round(c.start_s, 3), end_s=round(c.end_s, 3),
+                duration_s=round(c.duration_s, 3),
+            )
+            for c in chapters
+        ],
+    )
+
+
+@router.post("/analyze", response_model=AnalyzeOut)
+async def analyze_voice_source(req: AnalyzeRequest):
+    """Run Silero VAD + scoring over a slice of the staged source and
+    return the top 5 candidate windows. Each candidate gets a
+    pre-trimmed preview WAV stashed alongside the source so the UI can
+    play it back via /draft-audio.
+
+    Two analyze modes:
+
+    1. Default (``chapter_*`` unset) → analyze first ``analyze_minutes``
+       of the source.
+    2. Chapter-bounded (``chapter_start_s`` + ``chapter_end_s`` set) →
+       analyze that exact range. Caps at ``analyze_minutes`` so a
+       30-minute chapter doesn't sit on the GPU for two minutes.
+
+    The returned candidate ``start_s`` / ``end_s`` are relative to the
+    analyzed slice; ``analyzed_start_s`` lets the caller convert back to
+    full-source coordinates when calling /extract-window.
+    """
+    full = Path(req.audio_path)
+    if not full.exists():
+        raise HTTPException(404, f"audio_path not found: {req.audio_path}")
+    if full.parent.name and not full.parent.name.startswith("audiomat_voice_"):
+        raise HTTPException(403, "audio_path must point inside an audiomat_voice_ tempdir")
+
+    analyze_seconds = max(60.0, req.analyze_minutes * 60.0)
+    if req.chapter_start_s is not None and req.chapter_end_s is not None:
+        slice_start = max(0.0, float(req.chapter_start_s))
+        slice_end = min(
+            float(req.chapter_end_s),
+            slice_start + analyze_seconds,
+        )
+    else:
+        slice_start = 0.0
+        slice_end = analyze_seconds
+
+    slice_path = full.parent / f"slice_{int(slice_start)}_{int(slice_end)}.wav"
+    try:
+        if not slice_path.exists():
+            extract_audio_window(full, slice_path, slice_start, slice_end)
+    except Exception as e:
+        raise HTTPException(500, f"slice extraction failed: {e}")
+
+    from audiomat.voice_extract import find_candidates
+    try:
+        cands = find_candidates(slice_path)
+    except Exception as e:
+        raise HTTPException(500, f"VAD analysis failed: {type(e).__name__}: {e}")
+
+    out_cands: list[CandidateOut] = []
+    for i, c in enumerate(cands):
+        # Render each candidate as its own preview WAV. start_s/end_s on
+        # the candidate are slice-relative, so for the preview we pull
+        # straight out of slice_path (cheap — <1 s of ffmpeg per cut).
+        preview_path = full.parent / f"cand_{i:02d}_{c.start_s:.2f}-{c.end_s:.2f}.wav"
+        try:
+            extract_audio_window(slice_path, preview_path, c.start_s, c.end_s)
+        except Exception as e:
+            raise HTTPException(500, f"preview extraction failed: {e}")
+        out_cands.append(CandidateOut(
+            index=i,
+            start_s=c.start_s, end_s=c.end_s,
+            duration_s=round(c.duration_s, 3),
+            score=c.score, preview_path=str(preview_path),
+            breakdown=c.breakdown,
+        ))
+
+    return AnalyzeOut(
+        candidates=out_cands,
+        analyzed_start_s=round(slice_start, 3),
+        analyzed_end_s=round(slice_end, 3),
+        full_audio_path=str(full),
+    )
+
+
+@router.post("/preview-staged", response_model=PreviewStagedVoiceOut)
+def preview_staged_voice(req: PreviewStagedVoiceRequest):
+    """Render a TTS sample against a not-yet-saved voice — the user
+    listens before committing the voice to the library, catching cases
+    where a clean-looking clip happens to clone badly.
+
+    Uses production defaults (num_step=48, guidance_scale=2.0, speed=1.0)
+    and the stock OmniVoice model — fine-tunes attached via voice
+    metadata only kick in after the voice is saved.
+
+    Output WAV is written next to the staged voice in the same
+    ``audiomat_voice_*`` tempdir; served via the existing /draft-audio
+    endpoint (which has the same path-safety guard)."""
+    src = Path(req.audio_path)
+    if not src.exists():
+        raise HTTPException(404, f"audio_path not found: {req.audio_path}")
+    if not src.parent.name.startswith("audiomat_voice_"):
+        raise HTTPException(403, "audio_path must point inside an audiomat_voice_ tempdir")
+    transcript = req.transcript.strip()
+    sample_text = req.sample_text.strip()
+    if not transcript:
+        raise HTTPException(400, "transcript is required")
+    if not sample_text:
+        raise HTTPException(400, "sample_text is required")
+    if len(sample_text) > 1000:
+        raise HTTPException(400,
+            f"sample_text too long ({len(sample_text)} chars) — keep under 1000 "
+            f"to bound the TTS render time")
+
+    # Late imports keep the router import-light; soundfile + tts pull torch.
+    import hashlib
+    import time
+    import soundfile as sf
+    from audiomat.headers import prepare_for_tts
+    from audiomat.num2text import normalize_lang
+    from audiomat.state import get_tts
+
+    # Stock OmniVoice for the staged preview — voice's tts_model field
+    # is only meaningful after save (this is a brand-new voice).
+    tts = get_tts(target=None)
+    tts.load()
+    sr = tts.sample_rate
+
+    language = normalize_lang(req.language or "cs")
+    clean = prepare_for_tts(sample_text, lang=language)
+
+    # Cache by (transcript, sample_text, audio_path) so re-clicking
+    # Render with no changes is instant. audio_path includes the
+    # tempdir name so two separate uploads can't collide.
+    key_src = f"{src.resolve().as_posix()}|{transcript}|{clean}"
+    key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
+    out_path = src.parent / f"preview_{key}.wav"
+
+    if out_path.exists() and out_path.stat().st_size > 1024:
+        from audiomat.audio import probe_wav
+        info = probe_wav(out_path)
+        return PreviewStagedVoiceOut(
+            audio_path=str(out_path),
+            duration_s=round(info.duration_s, 2),
+            gen_seconds=0.0,            # cache hit — no fresh wall-clock to report
+        )
+
+    try:
+        t0 = time.time()
+        audios = tts._model.generate(
+            text=clean,
+            language=language,
+            ref_text=transcript,
+            ref_audio=str(src),
+            num_step=48,
+            guidance_scale=2.0,
+            speed=1.0,
+        )
+        gen_s = time.time() - t0
+        sf.write(str(out_path), audios[0], sr, subtype="PCM_16")
+    except Exception as e:
+        raise HTTPException(500, f"TTS render failed: {type(e).__name__}: {e}")
+
+    return PreviewStagedVoiceOut(
+        audio_path=str(out_path),
+        duration_s=round(audios[0].shape[-1] / sr, 2),
+        gen_seconds=round(gen_s, 2),
+    )
+
+
+@router.post("/extract-window", response_model=ExtractWindowOut)
+async def extract_voice_window(req: ExtractWindowRequest):
+    """Cut the user's chosen ``[start_s, end_s]`` (slice-relative,
+    matching what ``AnalyzeOut.candidates[*]`` returned) out of the
+    full converted source and return a path the caller can pass to
+    POST /api/voices.
+
+    The output enforces the OmniVoice 5-10 s reference window. We also
+    rename it ``voice.wav`` so the existing /api/voices commit flow
+    treats it as the canonical voice ref (caller can then delete the
+    larger ``voice_full.wav`` on commit; tempdir cleanup handles it).
+    """
+    full = Path(req.audio_path)
+    if not full.exists():
+        raise HTTPException(404, f"audio_path not found: {req.audio_path}")
+    if not full.parent.name.startswith("audiomat_voice_"):
+        raise HTTPException(403, "audio_path must point inside an audiomat_voice_ tempdir")
+
+    abs_start = max(0.0, req.analyzed_start_s + req.start_s)
+    abs_end = req.analyzed_start_s + req.end_s
+    duration = abs_end - abs_start
+    if duration < 3.0 or duration > 12.0:
+        raise HTTPException(400,
+            f"window must be 3-12 s (got {duration:.2f} s). "
+            f"OmniVoice's tested range is 5-10 s with light slack at the edges.")
+
+    out_path = full.parent / "voice.wav"
+    try:
+        info = extract_audio_window(full, out_path, abs_start, abs_end)
+    except Exception as e:
+        raise HTTPException(500, f"window extraction failed: {e}")
+
+    return ExtractWindowOut(
+        audio_path=str(out_path),
+        duration_s=round(info.duration_s, 3),
+        sample_rate=info.sample_rate,
+        channels=info.channels,
+    )
+
+
+# ---- short-form commit (also handles the long-form's /extract-window output) ----
+
+
 @router.post("", response_model=VoiceOut)
 async def create_voice(
     name: str = Form(...),
@@ -191,18 +452,64 @@ def get_voice(slug: str):
 
 
 @router.delete("/{slug}")
-def delete_voice(slug: str):
+def delete_voice(slug: str, replacement: str | None = None):
+    """Delete a voice from the library.
+
+    If the voice is referenced by one or more projects:
+
+    * No ``?replacement=`` query → respond 409 with a structured detail
+      ``{"message", "referencing_projects": [{slug, name}, ...]}`` so
+      the UI can prompt the user to pick a swap target.
+    * ``?replacement=<other-slug>`` → atomically reassign every
+      referencing project to ``replacement`` and then delete the
+      original. The voice swap goes through the same path as
+      ``PATCH /projects/{slug}/voice`` (manifest signature handles
+      chunk-cache invalidation on next render).
+
+    The replacement must exist in the library and must not be the
+    voice being deleted (no self-swap).
+    """
     target = PATHS.voice_dir(slug)
     if not target.exists():
         raise HTTPException(404, f"voice not found: {slug}")
-    # Refuse delete if any project references this voice
-    referencing = [p.name for p in Project.list_all(PATHS.projects_root)
-                   if p.voice_ref_slug == slug]
-    if referencing:
-        raise HTTPException(409,
-            f"voice is used by {len(referencing)} project(s): {', '.join(referencing)}")
+
+    referencing_projects = [
+        p for p in Project.list_all(PATHS.projects_root)
+        if p.voice_ref_slug == slug
+    ]
+
+    if referencing_projects and replacement is None:
+        raise HTTPException(409, {
+            "message": (
+                f"voice is used by {len(referencing_projects)} project(s); "
+                "pass ?replacement=<slug> to atomically reassign and delete"
+            ),
+            "referencing_projects": [
+                {"slug": p.name_slug, "name": p.name}
+                for p in referencing_projects
+            ],
+        })
+
+    replaced_in: list[str] = []
+    if referencing_projects:
+        if replacement == slug:
+            raise HTTPException(400, "replacement cannot equal the voice being deleted")
+        replacement_dir = PATHS.voice_dir(replacement)
+        if not (replacement_dir / "meta.json").exists():
+            raise HTTPException(404, f"replacement voice not found: {replacement}")
+        new_voice = Voice.load(replacement_dir)
+        for proj in referencing_projects:
+            proj.voice_ref = new_voice.name
+            proj.voice_ref_slug = new_voice.name_slug
+            proj.save()
+            replaced_in.append(proj.name_slug)
+
     Voice.load(target).delete()
-    return {"deleted": slug}
+    return {
+        "deleted": slug,
+        "replacement": replacement if replaced_in else None,
+        "replaced_in": replaced_in,
+    }
 
 
 @router.get("/{slug}/audio")

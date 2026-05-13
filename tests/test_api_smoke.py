@@ -26,10 +26,12 @@ def test_app_imports_and_registers_all_routes(isolated_library):
     c = _client(isolated_library)
     expected = {
         "/api/system/model-status",
+        "/api/settings/voice-validation-text",
         "/api/voices",
         "/api/voices/auto-transcribe",
         "/api/voices/draft-audio",
         "/api/voices/draft-upload",
+        "/api/voices/preview-staged",
         "/api/voices/{slug}",
         "/api/voices/{slug}/audio",
         "/api/projects",
@@ -37,7 +39,9 @@ def test_app_imports_and_registers_all_routes(isolated_library):
         "/api/projects/{slug}/blocks-skipped",
         "/api/projects/{slug}/book",
         "/api/projects/{slug}/params",
+        "/api/projects/{slug}/voice",
         "/api/projects/{slug}/preview-matrix",
+        "/api/projects/{slug}/preview-voices",
         "/api/projects/{slug}/preview-custom",
         "/api/projects/{slug}/preview-audio/{filename}",
         "/api/projects/{slug}/chapters",

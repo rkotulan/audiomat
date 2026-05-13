@@ -25,6 +25,7 @@ from audiomat.schemas import (
     BlocksSkippedRequest,
     BookMetaRequest,
     ProjectOut,
+    ProjectVoiceRequest,
 )
 from audiomat.slug import chapter_stem as compute_chapter_stem
 from audiomat.state import (
@@ -262,6 +263,28 @@ def update_project_params(slug: str, params: dict):
 # Lowercase primary subtag (2–3 letters) optionally followed by a region
 # / script suffix (cs-CZ, pt-BR, zh-Hant). Mirrors the frontend regex.
 _LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-zA-Z]{2,4})?$")
+
+
+@router.patch("/{slug}/voice", response_model=ProjectOut)
+def update_project_voice(slug: str, req: ProjectVoiceRequest):
+    """Swap the project's reference voice. Resolves the slug against the
+    voice library and updates ``voice_ref`` + ``voice_ref_slug``.
+
+    Cache impact: every cached chunk's manifest signature includes the
+    voice slug (see ``ProjectRenderer._params_signature`` in render.py),
+    so swap → automatic re-synth on next render. We don't pre-emptively
+    delete chunks here — keeping them around lets the user swap *back*
+    to the previous voice with no work.
+    """
+    proj = load_project_or_404(slug)
+    vdir = PATHS.voice_dir(req.voice_slug)
+    if not (vdir / "meta.json").exists():
+        raise HTTPException(404, f"voice not found: {req.voice_slug}")
+    voice = Voice.load(vdir)
+    proj.voice_ref = voice.name
+    proj.voice_ref_slug = voice.name_slug
+    proj.save()
+    return ProjectOut.from_project(proj)
 
 
 @router.patch("/{slug}/book", response_model=ProjectOut)

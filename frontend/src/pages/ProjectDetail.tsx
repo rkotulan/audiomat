@@ -17,6 +17,7 @@ import {
   Undo2,
   Square,
   Pencil,
+  Mic,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -46,8 +47,10 @@ import {
   deleteProject,
   getProject,
   listChapters,
+  listVoices,
   previewCustom,
   previewMatrix,
+  previewVoices,
   projectM4bUrl,
   resetAllChapters,
   resetChapter,
@@ -56,6 +59,7 @@ import {
   updateBlocksSkipped,
   updateProjectBook,
   updateProjectParams,
+  updateProjectVoice,
 } from '@/lib/api'
 import { LANGUAGE_OPTIONS, isValidLanguageCode } from '@/lib/languages'
 import type {
@@ -63,8 +67,11 @@ import type {
   ChaptersResponse,
   CustomPreviewResult,
   PreviewMatrix,
+  PreviewVoicesMatrix,
   Project,
   ProgressEvent,
+  Voice,
+  VoicePreviewCell,
 } from '@/lib/types'
 
 export function ProjectDetail() {
@@ -381,6 +388,7 @@ export function ProjectDetail() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="voice">Voice</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
           <TabsTrigger value="render">Render</TabsTrigger>
           <TabsTrigger value="output">Output</TabsTrigger>
@@ -411,11 +419,20 @@ export function ProjectDetail() {
           </Card>
 
           <div className="flex justify-end">
-            <Button onClick={() => setTab('preview')}>
-              Next: preview voice
+            <Button onClick={() => setTab('voice')}>
+              Next: pick voice
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
+        </TabsContent>
+
+        <TabsContent value="voice" className="space-y-4 pt-4">
+          <VoiceTab
+            project={project}
+            slug={slug}
+            onApply={refresh}
+            onPicked={() => setTab('preview')}
+          />
         </TabsContent>
 
         <TabsContent value="preview" className="space-y-4 pt-4">
@@ -1079,6 +1096,297 @@ function PreviewTab({
           if (tuningIndex !== null) onTuned(tuningIndex, custom)
         }}
       />
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------------------
+// Voice tab — pick which library voice to use for this project. User
+// selects any subset of voices, hits Generate, hears the same project
+// sample rendered by each, and clicks "Use this voice" to commit.
+// Voice swap invalidates the chunk cache automatically (manifest
+// signature includes the voice slug), so a swap mid-project just
+// re-renders on next run.
+// ----------------------------------------------------------------------------
+
+// Default seed for the checklist — small enough to be actionable
+// without "select all and wait", large enough to be a useful first A/B.
+// Soft default only; the checklist has no hard cap.
+const DEFAULT_VOICES_IN_MATRIX = 4
+
+function VoiceTab({
+  project, slug, onApply, onPicked,
+}: {
+  project: Project
+  slug: string
+  onApply: () => void
+  onPicked: () => void
+}) {
+  const [voices, setVoices] = useState<Voice[] | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [matrix, setMatrix] = useState<PreviewVoicesMatrix | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [committing, setCommitting] = useState<string | null>(null)
+  const [err, setErr] = useState('')
+  const [cellsDone, setCellsDone] = useState(0)
+  const [cellsTotal, setCellsTotal] = useState(0)
+
+  // Load voice library and seed selection: project's current voice +
+  // up to 3 most recent (by created date desc). User can re-tick.
+  useEffect(() => {
+    listVoices()
+      .then((vs) => {
+        setVoices(vs)
+        const seed = new Set<string>()
+        if (project.voice_ref_slug) seed.add(project.voice_ref_slug)
+        const sorted = [...vs].sort((a, b) => b.created.localeCompare(a.created))
+        for (const v of sorted) {
+          if (seed.size >= DEFAULT_VOICES_IN_MATRIX) break
+          seed.add(v.name_slug)
+        }
+        setSelected(seed)
+      })
+      .catch((e) => setErr(String(e)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const toggleVoice = (slug: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(slug)) {
+        next.delete(slug)
+      } else {
+        next.add(slug)
+      }
+      return next
+    })
+  }
+
+  const onGenerate = async () => {
+    if (selected.size === 0) return
+    setBusy(true)
+    setErr('')
+    setMatrix(null)
+    setCellsDone(0)
+    setCellsTotal(0)
+    try {
+      const m = await previewVoices(slug, [...selected], {
+        onStarted: (h) => setCellsTotal(h.total),
+        onCellDone: (idx) => setCellsDone(idx + 1),
+      })
+      setMatrix(m)
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusy(false)
+      setCellsDone(0)
+      setCellsTotal(0)
+    }
+  }
+
+  const onUseVoice = async (cell: VoicePreviewCell) => {
+    setCommitting(cell.voice_slug)
+    setErr('')
+    try {
+      await updateProjectVoice(slug, cell.voice_slug)
+      onApply()
+      onPicked()
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setCommitting(null)
+    }
+  }
+
+  const isCurrent = (cell: VoicePreviewCell) =>
+    cell.voice_slug === project.voice_ref_slug
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Voice picker</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Pick voices from your library and hear the same book sample
+            rendered by each. Listen, then click <em>Use this voice</em> on
+            whichever fits the book best.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Render uses the project's current params (num_step{' '}
+            {project.params.num_step}, gs {project.params.guidance_scale.toFixed(1)},
+            speed {project.params.speed.toFixed(2)}). Swapping voice
+            invalidates rendered chunks via the manifest signature — a
+            swap mid-project just re-renders on next run.
+          </p>
+
+          {voices === null ? (
+            <p className="text-sm text-muted-foreground">Loading voices…</p>
+          ) : voices.length === 0 ? (
+            <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+              No voices in library yet.{' '}
+              <Link to="/voices/new" className="text-primary underline">
+                Add one first
+              </Link>
+              .
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Voices to compare ({selected.size} of {voices.length})
+                </Label>
+                <div className="flex gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground underline"
+                    onClick={() => setSelected(new Set(voices.map((v) => v.name_slug)))}
+                  >
+                    Select all
+                  </button>
+                  <span className="text-muted-foreground">·</span>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground underline"
+                    onClick={() => setSelected(
+                      project.voice_ref_slug
+                        ? new Set([project.voice_ref_slug])
+                        : new Set(),
+                    )}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                {voices.map((v) => {
+                  const isSel = selected.has(v.name_slug)
+                  return (
+                    <label
+                      key={v.name_slug}
+                      className={[
+                        'flex items-center gap-2 rounded-md border p-2 text-sm cursor-pointer transition-colors',
+                        isSel ? 'border-primary bg-primary/5' : 'hover:bg-secondary/40',
+                      ].join(' ')}
+                    >
+                      <Checkbox
+                        checked={isSel}
+                        onCheckedChange={() => toggleVoice(v.name_slug)}
+                      />
+                      <span className="flex-1 truncate">{v.name}</span>
+                      {v.name_slug === project.voice_ref_slug && (
+                        <Badge variant="default" className="font-normal">
+                          <Star className="h-3 w-3" /> current
+                        </Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground font-mono shrink-0">
+                        {v.duration_s.toFixed(1)} s
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Button
+              onClick={onGenerate}
+              disabled={busy || selected.size === 0 || voices === null}
+            >
+              <Mic className="h-4 w-4" />
+              {busy
+                ? 'Generating…'
+                : matrix
+                ? 'Re-generate'
+                : `Generate matrix (${selected.size} ${selected.size === 1 ? 'voice' : 'voices'})`}
+            </Button>
+          </div>
+
+          <InlineModelProgress visible={busy} />
+          {busy && cellsTotal > 0 && (
+            <InlineProgressCard
+              message={`Generating ${cellsDone} / ${cellsTotal} voices…`}
+              percent={(cellsDone / cellsTotal) * 100}
+            />
+          )}
+          {err && <div className="text-sm text-destructive">{err}</div>}
+
+          {matrix && (
+            <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
+              <p className="font-medium">
+                Sample text — block {matrix.sample_block_index + 1} of{' '}
+                {matrix.sample_block_total} ({matrix.sample_chars} chars)
+              </p>
+              <p className="italic line-clamp-3">{matrix.sample_text}</p>
+              <p className="text-muted-foreground">
+                Same picker as the Preview tab uses, so you'll hear identical
+                text in both.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {matrix && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {matrix.voices.map((cell) => (
+            <Card
+              key={cell.voice_slug}
+              className={isCurrent(cell) ? 'border-primary' : ''}
+            >
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    {cell.voice_name}
+                    {isCurrent(cell) && (
+                      <Badge variant="default" className="font-normal">
+                        <Star className="h-3 w-3" /> current
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="text-xs text-muted-foreground font-normal font-mono">
+                    {cell.duration_s.toFixed(1)} s
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <audio
+                  controls
+                  src={cell.audio_url}
+                  preload="metadata"
+                  className="w-full h-9"
+                />
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {cell.cached ? 'cached' : `${cell.gen_seconds.toFixed(1)} s sample`}
+                  </span>
+                  <Button
+                    size="sm"
+                    onClick={() => onUseVoice(cell)}
+                    disabled={
+                      committing !== null ||
+                      isCurrent(cell)
+                    }
+                  >
+                    {committing === cell.voice_slug
+                      ? 'Switching…'
+                      : isCurrent(cell)
+                      ? 'In use'
+                      : (
+                        <>
+                          Use this voice
+                          <ArrowRight className="h-3 w-3" />
+                        </>
+                      )}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

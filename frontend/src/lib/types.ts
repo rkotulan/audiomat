@@ -113,6 +113,56 @@ export interface DraftUploadResult {
   warning: string
 }
 
+// ---- Long-source voice picker (multi-step wizard) ----
+
+export interface ChapterMarker {
+  index: number
+  title: string
+  start_s: number
+  end_s: number
+  duration_s: number
+}
+
+export interface DraftUploadLongResult {
+  audio_path: string                  // converted full WAV inside tempdir
+  duration_s: number
+  sample_rate: number
+  channels: number
+  chapters: ChapterMarker[]           // empty when source has none
+}
+
+export interface VoiceCandidate {
+  index: number
+  start_s: number                     // relative to the analyzed slice
+  end_s: number
+  duration_s: number
+  score: number                       // 0-100 composite
+  preview_path: string                // pre-trimmed WAV in tempdir, served via draftAudioUrl
+  breakdown: {
+    density: number
+    density_score: number
+    rms_cv: number
+    consistency_score: number
+    peak: number
+    clipping_score: number
+    snr_db: number | null             // null when too little silence to measure
+    snr_score: number
+  }
+}
+
+export interface AnalyzeResult {
+  candidates: VoiceCandidate[]
+  analyzed_start_s: number
+  analyzed_end_s: number
+  full_audio_path: string
+}
+
+export interface StagedVoicePreview {
+  audio_path: string                  // tempdir-served via draftAudioUrl
+  duration_s: number
+  gen_seconds: number                 // 0 on cache hit
+}
+
 export interface PreviewVariant {
   label: 'Fast' | 'Balanced' | 'Crisp' | 'Stable'
   num_step: number
@@ -135,6 +185,31 @@ export interface PreviewMatrix {
   sample_block_total: number
   total_book_chars: number
   variants: PreviewVariant[]
+}
+
+export interface VoicePreviewCell {
+  voice_slug: string
+  voice_name: string
+  audio_url: string
+  cached: boolean
+  gen_seconds: number
+  duration_s: number
+}
+
+export interface PreviewVoicesMatrix {
+  sample_text: string
+  sample_chars: number
+  sample_block_index: number
+  sample_block_total: number
+  total_book_chars: number
+  // Project params used to render the cells. Echoed so the UI can show
+  // "rendered at 48/2.0/1.0" — useful when the user later changes
+  // params and wonders why the cached samples sound a bit different
+  // from a fresh quality preview.
+  num_step: number
+  guidance_scale: number
+  speed: number
+  voices: VoicePreviewCell[]
 }
 
 export type ChapterStatus = 'skipped' | 'pending' | 'rendered' | 'rendering' | 'failed'

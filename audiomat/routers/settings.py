@@ -13,8 +13,17 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from audiomat.hf_client import list_user_repos
-from audiomat.schemas import HFTokenRequest, HFTokenStatusOut
+from audiomat.schemas import (
+    HFTokenRequest, HFTokenStatusOut,
+    VoiceValidationTextOut, VoiceValidationTextRequest,
+)
 from audiomat.secrets import get_hf_token, hf_token_source, set_hf_token
+from audiomat.settings_store import (
+    DEFAULT_VOICE_VALIDATION_TEXT,
+    get_voice_validation_text,
+    reset_voice_validation_text,
+    set_voice_validation_text,
+)
 from audiomat.state import PATHS
 
 
@@ -54,6 +63,41 @@ def clear_hf_settings():
         has_token=get_hf_token(PATHS.secrets_path) is not None,
         source=hf_token_source(PATHS.secrets_path),
     )
+
+
+@router.get("/voice-validation-text", response_model=VoiceValidationTextOut)
+def get_voice_validation_text_setting():
+    """Return the user's preferred validation paragraph for voice creation.
+    Falls back to the built-in Czech default when no override is stored —
+    callers always get a usable string. ``is_default`` lets the UI show a
+    "(reset)" link only when there's actually something to reset."""
+    text = get_voice_validation_text(PATHS.settings_path)
+    return VoiceValidationTextOut(
+        text=text,
+        is_default=(text == DEFAULT_VOICE_VALIDATION_TEXT),
+    )
+
+
+@router.put("/voice-validation-text", response_model=VoiceValidationTextOut)
+def set_voice_validation_text_setting(req: VoiceValidationTextRequest):
+    """Store the user's preferred validation paragraph. Persists to
+    ``settings.json`` so the next voice creation (any browser, after a
+    restart) starts with this text instead of the Czech default."""
+    try:
+        stored = set_voice_validation_text(PATHS.settings_path, req.text)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return VoiceValidationTextOut(
+        text=stored,
+        is_default=(stored == DEFAULT_VOICE_VALIDATION_TEXT),
+    )
+
+
+@router.delete("/voice-validation-text", response_model=VoiceValidationTextOut)
+def reset_voice_validation_text_setting():
+    """Drop the user's override and return to the built-in default."""
+    text = reset_voice_validation_text(PATHS.settings_path)
+    return VoiceValidationTextOut(text=text, is_default=True)
 
 
 @router.post("/hf/validate")
