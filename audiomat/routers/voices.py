@@ -474,7 +474,7 @@ def delete_voice(slug: str, replacement: str | None = None):
         raise HTTPException(404, f"voice not found: {slug}")
 
     referencing_projects = [
-        p for p in Project.list_all(PATHS.projects_root)
+        p for p in Project.list_all()
         if p.voice_ref_slug == slug
     ]
 

@@ -78,6 +78,10 @@ export interface Project {
   created: string
   last_run: string
   has_final_m4b: boolean
+  // Optimistic-lock counter — echo back as `If-Match` on PATCH so the
+  // server can detect "another tab edited this since you loaded it"
+  // and respond 409 instead of silently overwriting.
+  version: number
 }
 
 export type ProgressEventKind =

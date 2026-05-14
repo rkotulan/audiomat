@@ -39,36 +39,23 @@ def _make_voice(library_root: Path, slug: str, display_name: str) -> None:
 
 def _make_project(library_root: Path, slug: str, voice_name: str, voice_slug: str) -> None:
     """Create a minimal project that points at ``voice_slug`` via
-    ``voice_ref``. We only need config.json — no book / chunks needed
-    for delete-replacement tests."""
+    ``voice_ref`` — DB row + a stub book.epub on disk so book_path
+    checks don't fall over."""
     pdir = library_root / "projects" / slug
     pdir.mkdir(parents=True, exist_ok=True)
-    (pdir / "config.json").write_text(json.dumps({
-        "name": slug,
-        "name_slug": slug,
-        "book": {
-            "filename": "stub.epub",
-            "blocks_total": 1,
-            "blocks_skipped": [],
-            "title": None, "author": None, "language": "cs",
-        },
-        "voice_ref": voice_name,
-        "voice_ref_slug": voice_slug,
-        "params": {
-            "num_step": 48, "guidance_scale": 2.0, "speed": 1.0,
-            "min_chars": 90, "max_chars": 200, "target_lufs": -16.0,
-            "silence_gap_ms": 200, "section_headers": [],
-        },
-        "status": {
-            "chapters_done": 0, "chapters_total": 0,
-            "last_completed": None, "phase": "draft",
-        },
-        "created": "2026-05-13T00:00:00Z",
-        "last_run": "",
-    }, ensure_ascii=False), encoding="utf-8")
-    # book file referenced by config has to exist for Project.list_all
-    # not to choke on the load — empty stub is fine.
     (pdir / "stub.epub").write_bytes(b"")
+    from audiomat.db import get_conn
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO projects "
+        "(name_slug, name, book_filename, book_blocks_total, "
+        " voice_ref, voice_ref_slug, "
+        " status_phase, status_chapters_done, status_chapters_total, "
+        " created, last_run, params_json) "
+        "VALUES (?, ?, 'stub.epub', 1, ?, ?, 'draft', 0, 0, "
+        "'2026-05-13T00:00:00Z', '', '{}')",
+        (slug, slug, voice_name, voice_slug),
+    )
 
 
 def test_delete_unused_voice_succeeds(isolated_library):
@@ -109,14 +96,12 @@ def test_delete_with_replacement_swaps_projects_and_removes_voice(isolated_libra
     assert body["deleted"] == "alice"
     assert body["replacement"] == "bob"
     assert body["replaced_in"] == ["myproject"]
-    # Voice file gone, project rewritten.
+    # Voice gone (FS dir + DB row), project's voice ref rewritten.
     assert not (isolated_library / "voices" / "alice").exists()
-    cfg = json.loads(
-        (isolated_library / "projects" / "myproject" / "config.json")
-        .read_text(encoding="utf-8")
-    )
-    assert cfg["voice_ref"] == "Bob"
-    assert cfg["voice_ref_slug"] == "bob"
+    from audiomat.project import Project
+    proj = Project.load("myproject")
+    assert proj.voice_ref == "Bob"
+    assert proj.voice_ref_slug == "bob"
 
 
 def test_delete_with_self_replacement_rejected(isolated_library):

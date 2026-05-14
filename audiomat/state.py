@@ -274,10 +274,10 @@ def dataclass_to_dict(obj: Any) -> dict:
 def load_project_or_404(slug: str) -> Project:
     """Load a Project by slug or raise 404. Centralized so every router
     that takes ``{slug}`` returns the same error shape."""
-    target = PATHS.project_dir(slug)
-    if not (target / "config.json").exists():
+    try:
+        return Project.load(slug)
+    except FileNotFoundError:
         raise HTTPException(404, f"project not found: {slug}")
-    return Project.load(target)
 
 
 def book_blocks(proj: Project) -> list[Block]:

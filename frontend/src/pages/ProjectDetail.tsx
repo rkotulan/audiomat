@@ -51,6 +51,7 @@ import {
   previewCustom,
   previewMatrix,
   previewVoices,
+  ProjectVersionConflict,
   projectM4bUrl,
   resetAllChapters,
   resetChapter,
@@ -81,6 +82,11 @@ export function ProjectDetail() {
   const [project, setProject] = useState<Project | null>(null)
   const [tab, setTab] = useState<string>('overview')
   const [err, setErr] = useState('')
+  // Set when a PATCH was rejected with 409 (project was edited in another
+  // tab). Banner-driven UX: user clicks Reload to fetch the new state and
+  // can retry their edit. We deliberately don't auto-refresh — the user's
+  // unsaved form values would be lost without warning.
+  const [versionConflict, setVersionConflict] = useState(false)
   const [busy, setBusy] = useState(false)
   const [renderEvents, setRenderEvents] = useState<ProgressEvent[]>([])
   const [latest, setLatest] = useState<ProgressEvent | null>(null)
@@ -379,6 +385,31 @@ export function ProjectDetail() {
         </div>
       </div>
 
+      {versionConflict && (
+        <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm flex items-center justify-between gap-3">
+          <div>
+            <p className="font-medium text-amber-700 dark:text-amber-300">
+              Project was edited in another tab
+            </p>
+            <p className="text-xs text-amber-700/80 dark:text-amber-300/80">
+              Your last change was rejected to avoid overwriting the
+              other edit. Reload to see the current state, then retry.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setVersionConflict(false)
+              refresh()
+            }}
+          >
+            <RotateCw className="h-3 w-3" />
+            Reload
+          </Button>
+        </div>
+      )}
+
       {err && (
         <div className="rounded-md border border-destructive bg-destructive/10 p-3 text-sm text-destructive">
           {err}
@@ -432,6 +463,7 @@ export function ProjectDetail() {
             slug={slug}
             onApply={refresh}
             onPicked={() => setTab('preview')}
+            onVersionConflict={() => setVersionConflict(true)}
           />
         </TabsContent>
 
@@ -441,6 +473,7 @@ export function ProjectDetail() {
             slug={slug}
             onApply={refresh}
             onPicked={() => setTab('render')}
+            onVersionConflict={() => setVersionConflict(true)}
           />
         </TabsContent>
 
@@ -600,11 +633,15 @@ export function ProjectDetail() {
                 ? [...current, blockIndex]
                 : current.filter((i) => i !== blockIndex)
               try {
-                await updateBlocksSkipped(slug, next)
+                await updateBlocksSkipped(slug, next, project.version)
                 await refreshChapters()
                 refresh()
               } catch (e) {
-                alert(`Failed to update skip list: ${e}`)
+                if (e instanceof ProjectVersionConflict) {
+                  setVersionConflict(true)
+                } else {
+                  alert(`Failed to update skip list: ${e}`)
+                }
               }
             }}
             onResetChapter={(stem, renderableIndex) => {
@@ -735,8 +772,18 @@ export function ProjectDetail() {
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4 pt-4">
-          <OutputParamsCard project={project} slug={slug} onSaved={refresh} />
-          <BookMetadataCard project={project} slug={slug} onSaved={refresh} />
+          <OutputParamsCard
+            project={project}
+            slug={slug}
+            onSaved={refresh}
+            onVersionConflict={() => setVersionConflict(true)}
+          />
+          <BookMetadataCard
+            project={project}
+            slug={slug}
+            onSaved={refresh}
+            onVersionConflict={() => setVersionConflict(true)}
+          />
           <PronunciationsCard slug={slug} />
           <Card>
             <CardHeader>
@@ -902,11 +949,13 @@ function PreviewTab({
   slug,
   onApply,
   onPicked,
+  onVersionConflict,
 }: {
   project: Project
   slug: string
   onApply: () => void
   onPicked: () => void
+  onVersionConflict: () => void
 }) {
   const [matrix, setMatrix] = useState<PreviewMatrix | null>(null)
   const [busy, setBusy] = useState(false)
@@ -942,11 +991,15 @@ function PreviewTab({
         num_step: variant.num_step,
         guidance_scale: variant.guidance_scale,
         speed: variant.speed,
-      })
+      }, project.version)
       onApply()
       onPicked()
     } catch (e) {
-      alert(`Failed to apply params: ${e}`)
+      if (e instanceof ProjectVersionConflict) {
+        onVersionConflict()
+      } else {
+        alert(`Failed to apply params: ${e}`)
+      }
     }
   }
 
@@ -1115,12 +1168,13 @@ function PreviewTab({
 const DEFAULT_VOICES_IN_MATRIX = 4
 
 function VoiceTab({
-  project, slug, onApply, onPicked,
+  project, slug, onApply, onPicked, onVersionConflict,
 }: {
   project: Project
   slug: string
   onApply: () => void
   onPicked: () => void
+  onVersionConflict: () => void
 }) {
   const [voices, setVoices] = useState<Voice[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -1188,11 +1242,15 @@ function VoiceTab({
     setCommitting(cell.voice_slug)
     setErr('')
     try {
-      await updateProjectVoice(slug, cell.voice_slug)
+      await updateProjectVoice(slug, cell.voice_slug, project.version)
       onApply()
       onPicked()
     } catch (e) {
-      setErr(String(e))
+      if (e instanceof ProjectVersionConflict) {
+        onVersionConflict()
+      } else {
+        setErr(String(e))
+      }
     } finally {
       setCommitting(null)
     }
@@ -1522,10 +1580,12 @@ function OutputParamsCard({
   project,
   slug,
   onSaved,
+  onVersionConflict,
 }: {
   project: Project
   slug: string
   onSaved: () => void
+  onVersionConflict: () => void
 }) {
   const [params, setParams] = useState({
     min_chars: project.params.min_chars,
@@ -1546,11 +1606,15 @@ function OutputParamsCard({
     setSaving(true)
     setMsg('')
     try {
-      await updateProjectParams(slug, params)
+      await updateProjectParams(slug, params, project.version)
       setMsg('Saved.')
       onSaved()
     } catch (e) {
-      setMsg(`Failed: ${e}`)
+      if (e instanceof ProjectVersionConflict) {
+        onVersionConflict()
+      } else {
+        setMsg(`Failed: ${e}`)
+      }
     } finally {
       setSaving(false)
     }
@@ -1632,10 +1696,12 @@ function BookMetadataCard({
   project,
   slug,
   onSaved,
+  onVersionConflict,
 }: {
   project: Project
   slug: string
   onSaved: () => void
+  onVersionConflict: () => void
 }) {
   const initial = project.book.language || 'cs'
   const isPreset = LANGUAGE_OPTIONS.some((o) => o.code === initial)
@@ -1654,11 +1720,15 @@ function BookMetadataCard({
     setSaving(true)
     setMsg('')
     try {
-      await updateProjectBook(slug, { language: effective })
+      await updateProjectBook(slug, { language: effective }, project.version)
       setMsg('Saved.')
       onSaved()
     } catch (e) {
-      setMsg(`Failed: ${e}`)
+      if (e instanceof ProjectVersionConflict) {
+        onVersionConflict()
+      } else {
+        setMsg(`Failed: ${e}`)
+      }
     } finally {
       setSaving(false)
     }

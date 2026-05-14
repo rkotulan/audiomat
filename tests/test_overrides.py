@@ -170,7 +170,6 @@ def _make_project(library_root: Path, name: str = "TestBook") -> str:
     )
 
     proj = Project.create(
-        projects_root=projects_root,
         name=name,
         book_src=book_src,
         voice_name="TestVoice",

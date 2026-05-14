@@ -194,7 +194,7 @@ def _make_project(library_root: Path, name: str = "PronTest") -> str:
     book_src = library_root / "_book.txt"
     book_src.write_text("Some text.", encoding="utf-8")
     proj = Project.create(
-        projects_root=projects_root, name=name, book_src=book_src,
+        name=name, book_src=book_src,
         voice_name="V", voice_slug="V", book_meta={"language": "cs"},
     )
     return proj.name_slug

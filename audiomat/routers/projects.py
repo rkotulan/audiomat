@@ -13,10 +13,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, Header, HTTPException, UploadFile
 
 from audiomat.epub import parse_epub
-from audiomat.project import Project, RenderParams
+from audiomat.project import Project, ProjectVersionMismatch, RenderParams
 from audiomat.pronunciations import (
     load_pronunciations,
     save_pronunciations,
@@ -106,15 +106,15 @@ def auto_skip_indices(blocks: list, max_scan: int = 10) -> list[int]:
 
 @router.get("", response_model=list[ProjectOut])
 def list_projects():
-    return [ProjectOut.from_project(p) for p in Project.list_all(PATHS.projects_root)]
+    return [ProjectOut.from_project(p) for p in Project.list_all()]
 
 
 @router.get("/{slug}", response_model=ProjectOut)
 def get_project(slug: str):
-    target = PATHS.project_dir(slug)
-    if not (target / "config.json").exists():
+    try:
+        return ProjectOut.from_project(Project.load(slug))
+    except FileNotFoundError:
         raise HTTPException(404, f"project not found: {slug}")
-    return ProjectOut.from_project(Project.load(target))
 
 
 @router.post("", response_model=ProjectOut)
@@ -168,7 +168,6 @@ async def create_project(
 
     try:
         proj = Project.create(
-            projects_root=PATHS.projects_root,
             name=name.strip(),
             book_src=book_tmp,
             voice_name=voice.name,
@@ -227,8 +226,37 @@ def _prune_orphan_chunks(proj: Project) -> int:
     return removed
 
 
+def _save_with_if_match(proj: Project, if_match: int | None) -> None:
+    """Persist a Project mutation with optional optimistic-lock check.
+
+    When the caller supplied an ``If-Match`` header, use the
+    conditional save path so a concurrent edit elsewhere fails with
+    409 instead of silently winning. Without the header, fall back to
+    a blind UPSERT — this preserves v0.2 client behavior for callers
+    that don't track version yet (curl scripts, the old frontend).
+    """
+    try:
+        if if_match is not None:
+            proj.save_with_version(if_match)
+        else:
+            proj.save()
+    except ProjectVersionMismatch as e:
+        raise HTTPException(409, {
+            "message": (
+                f"project was modified in another tab; reload to see "
+                f"the current state and retry"
+            ),
+            "expected_version": e.expected,
+            "current_version": e.actual,
+        })
+
+
 @router.patch("/{slug}/blocks-skipped")
-def update_blocks_skipped(slug: str, req: BlocksSkippedRequest):
+def update_blocks_skipped(
+    slug: str,
+    req: BlocksSkippedRequest,
+    if_match: int | None = Header(default=None, alias="If-Match"),
+):
     """Replace project.book.blocks_skipped + auto-prune any chunks dirs
     that no longer match the new renderable list.
 
@@ -236,7 +264,7 @@ def update_blocks_skipped(slug: str, req: BlocksSkippedRequest):
     response under ``orphans_removed`` (added field beyond ProjectOut)."""
     proj = load_project_or_404(slug)
     proj.book.blocks_skipped = sorted(set(req.indices))
-    proj.save()
+    _save_with_if_match(proj, if_match)
     pruned = _prune_orphan_chunks(proj)
     if pruned > 0:
         proj.append_log(f"pruned {pruned} orphan chapter dir(s) after blocks_skipped change")
@@ -246,7 +274,11 @@ def update_blocks_skipped(slug: str, req: BlocksSkippedRequest):
 
 
 @router.patch("/{slug}/params")
-def update_project_params(slug: str, params: dict):
+def update_project_params(
+    slug: str,
+    params: dict,
+    if_match: int | None = Header(default=None, alias="If-Match"),
+):
     """Update render params (preview matrix selection, advanced edits).
 
     Voice change is **not** allowed here — invalidates whole cache;
@@ -256,7 +288,7 @@ def update_project_params(slug: str, params: dict):
     current.update(params)
     proj.params = RenderParams(**{k: current.get(k) for k in current
                                    if k in RenderParams.__dataclass_fields__})
-    proj.save()
+    _save_with_if_match(proj, if_match)
     return ProjectOut.from_project(proj)
 
 
@@ -266,7 +298,11 @@ _LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-zA-Z]{2,4})?$")
 
 
 @router.patch("/{slug}/voice", response_model=ProjectOut)
-def update_project_voice(slug: str, req: ProjectVoiceRequest):
+def update_project_voice(
+    slug: str,
+    req: ProjectVoiceRequest,
+    if_match: int | None = Header(default=None, alias="If-Match"),
+):
     """Swap the project's reference voice. Resolves the slug against the
     voice library and updates ``voice_ref`` + ``voice_ref_slug``.
 
@@ -283,12 +319,16 @@ def update_project_voice(slug: str, req: ProjectVoiceRequest):
         raise HTTPException(404, f"voice not found: {req.voice_slug}")
     proj.voice_ref = voice.name
     proj.voice_ref_slug = voice.name_slug
-    proj.save()
+    _save_with_if_match(proj, if_match)
     return ProjectOut.from_project(proj)
 
 
 @router.patch("/{slug}/book", response_model=ProjectOut)
-def update_project_book(slug: str, req: BookMetaRequest):
+def update_project_book(
+    slug: str,
+    req: BookMetaRequest,
+    if_match: int | None = Header(default=None, alias="If-Match"),
+):
     """Patch the project's stored book metadata. Currently only
     ``language`` — used to override mis-detected EPUB DC metadata or
     correct a TXT project that was created with the wrong default.
@@ -311,16 +351,17 @@ def update_project_book(slug: str, req: BookMetaRequest):
                 f"or BCP 47 (cs-CZ, pt-BR)",
             )
         proj.book.language = norm
-    proj.save()
+    _save_with_if_match(proj, if_match)
     return ProjectOut.from_project(proj)
 
 
 @router.delete("/{slug}")
 def delete_project(slug: str):
-    target = PATHS.project_dir(slug)
-    if not target.exists():
+    try:
+        proj = Project.load(slug)
+    except FileNotFoundError:
         raise HTTPException(404, f"project not found: {slug}")
-    Project.load(target).delete()
+    proj.delete()
     if slug in RENDER_QUEUES:
         RENDER_QUEUES.pop(slug, None)
     return {"deleted": slug}

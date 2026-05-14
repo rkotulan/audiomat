@@ -30,6 +30,50 @@ async function ok<T>(r: Response): Promise<T> {
   return r.json() as Promise<T>
 }
 
+/** Thrown by project PATCH helpers when the server returned 409
+ *  (project was modified in another tab since the version we sent).
+ *  The caller can catch this specific type to render a "refresh
+ *  required" banner instead of a generic error. */
+export class ProjectVersionConflict extends Error {
+  expected: number
+  current: number
+  constructor(expected: number, current: number) {
+    super(
+      `project version mismatch: expected ${expected}, server has ${current}`,
+    )
+    this.name = 'ProjectVersionConflict'
+    this.expected = expected
+    this.current = current
+  }
+}
+
+/** PATCH wrapper that adds ``If-Match`` and translates 409 into a
+ *  typed :class:`ProjectVersionConflict`. All other failures bubble
+ *  up as a regular Error matching the rest of the API client. */
+async function patchWithVersion<T>(
+  url: string,
+  body: unknown,
+  expectedVersion: number,
+): Promise<T> {
+  const r = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'If-Match': String(expectedVersion),
+    },
+    body: JSON.stringify(body),
+  })
+  if (r.status === 409) {
+    const data = await r.json().catch(() => ({}))
+    const detail = data?.detail ?? {}
+    throw new ProjectVersionConflict(
+      detail.expected_version ?? expectedVersion,
+      detail.current_version ?? expectedVersion,
+    )
+  }
+  return ok<T>(r)
+}
+
 // ---- voices ----
 
 export const listVoices = () =>
@@ -350,26 +394,29 @@ export async function createProject(args: {
   return fetch(`${BASE}/projects`, { method: 'POST', body: fd }).then(ok<Project>)
 }
 
-export const updateProjectParams = (slug: string, params: Partial<Project['params']>) =>
-  fetch(`${BASE}/projects/${slug}/params`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  }).then(ok<Project>)
+export const updateProjectParams = (
+  slug: string,
+  params: Partial<Project['params']>,
+  expectedVersion: number,
+) => patchWithVersion<Project>(
+  `${BASE}/projects/${slug}/params`, params, expectedVersion,
+)
 
-export const updateProjectBook = (slug: string, body: { language?: string }) =>
-  fetch(`${BASE}/projects/${slug}/book`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }).then(ok<Project>)
+export const updateProjectBook = (
+  slug: string,
+  body: { language?: string },
+  expectedVersion: number,
+) => patchWithVersion<Project>(
+  `${BASE}/projects/${slug}/book`, body, expectedVersion,
+)
 
-export const updateBlocksSkipped = (slug: string, indices: number[]) =>
-  fetch(`${BASE}/projects/${slug}/blocks-skipped`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ indices }),
-  }).then(ok<Project>)
+export const updateBlocksSkipped = (
+  slug: string,
+  indices: number[],
+  expectedVersion: number,
+) => patchWithVersion<Project>(
+  `${BASE}/projects/${slug}/blocks-skipped`, { indices }, expectedVersion,
+)
 
 export const deleteProject = (slug: string) =>
   fetch(`${BASE}/projects/${slug}`, { method: 'DELETE' }).then(ok)
@@ -528,12 +575,13 @@ export async function previewVoices(
   throw new Error('preview-voices: stream ended without complete event')
 }
 
-export const updateProjectVoice = (slug: string, voice_slug: string) =>
-  fetch(`${BASE}/projects/${slug}/voice`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ voice_slug }),
-  }).then(ok<Project>)
+export const updateProjectVoice = (
+  slug: string,
+  voice_slug: string,
+  expectedVersion: number,
+) => patchWithVersion<Project>(
+  `${BASE}/projects/${slug}/voice`, { voice_slug }, expectedVersion,
+)
 
 export const previewCustom = (
   slug: string,

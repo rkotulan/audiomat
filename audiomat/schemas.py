@@ -174,6 +174,10 @@ class ProjectOut(BaseModel):
     created: str
     last_run: str
     has_final_m4b: bool
+    # Optimistic-lock counter — frontend echoes back as ``If-Match``
+    # on PATCH so the backend can detect "another tab edited this
+    # since you loaded it" via Project.save_with_version.
+    version: int
 
     @classmethod
     def from_project(cls, p: Project) -> "ProjectOut":
@@ -185,6 +189,7 @@ class ProjectOut(BaseModel):
             status=dataclass_to_dict(p.status),
             created=p.created, last_run=p.last_run,
             has_final_m4b=p.final_path.exists(),
+            version=p.version,
         )
 
 
