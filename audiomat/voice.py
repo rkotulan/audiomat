@@ -1,34 +1,42 @@
-"""Voice library — one cloned-voice asset per directory.
+"""Voice library — one cloned-voice asset per slug.
 
-A voice is a triple of files inside ``voices/<slug>/``:
+Backed by a row in the ``voices`` table (audiomat.db) plus two files
+on disk inside ``voices/<slug>/``:
 
 * ``voice.wav`` — 24 kHz mono 16-bit, 5–10 s recommended (OmniVoice's
   tested range; see CLAUDE.md gotchas).
 * ``voice.txt`` — exact transcript of ``voice.wav`` (manually revised
   after Whisper auto-draft is the proven pattern).
-* ``meta.json`` — wav properties + display name + notes (this module).
 
-This file handles only data — file format conversion / Whisper
-auto-transcription happens in higher-level orchestration (api.py / audio.py).
+In v0.2 the metadata lived in ``voices/<slug>/meta.json`` next to the
+WAV/txt. v0.3 moved it into SQLite for atomic writes and to remove the
+"walk N directories on every list" cost. Binaries stay on disk (BLOBs
+make backup / inspection painful at hundreds of MB).
+
+This module handles only data — file format conversion / Whisper
+auto-transcription happens in higher-level orchestration (api.py /
+audio.py).
 """
 from __future__ import annotations
 
 import datetime as dt
-import json
 import shutil
-from dataclasses import asdict, dataclass, field
+import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
+from audiomat.db import get_conn
 from audiomat.slug import slugify
 
 
 @dataclass
 class Voice:
-    """Voice library entry. Loaded from / saved to ``meta.json``."""
+    """Voice library entry. Persisted in the ``voices`` table; the
+    ``dir``/``wav_path``/``txt_path`` properties point to the
+    on-disk binaries which live next to where ``meta.json`` used to."""
 
     name: str
     name_slug: str
-    dir: Path
     duration_s: float
     sample_rate: int
     channels: int
@@ -43,6 +51,16 @@ class Voice:
     # fine-tune at preview / render time).
     tts_model: str | None = None
 
+    # ---- on-disk paths (computed from PATHS.voices_root + slug) ----
+
+    @property
+    def dir(self) -> Path:
+        """Directory holding voice.wav + voice.txt for this voice.
+        Resolves against the live ``PATHS`` so test fixtures with
+        AUDIOMAT_LIBRARY_ROOT overrides work transparently."""
+        from audiomat.state import PATHS
+        return PATHS.voice_dir(self.name_slug)
+
     @property
     def wav_path(self) -> Path:
         return self.dir / "voice.wav"
@@ -52,95 +70,117 @@ class Voice:
         return self.dir / "voice.txt"
 
     @property
-    def meta_path(self) -> Path:
-        return self.dir / "meta.json"
-
-    @property
     def is_valid(self) -> bool:
-        """Quick health check: all three files exist and are non-empty."""
+        """Quick health check: WAV + transcript both exist and are
+        non-empty. Doesn't verify the DB row — callers that hold a
+        Voice instance already know it loaded successfully."""
         return all(
             p.exists() and p.stat().st_size > 0
-            for p in (self.wav_path, self.txt_path, self.meta_path)
+            for p in (self.wav_path, self.txt_path)
         )
 
     def transcript(self) -> str:
         """Read voice.txt as a UTF-8 string, stripped."""
         return self.txt_path.read_text(encoding="utf-8").strip()
 
-    # -- IO --
+    # ---- DB adapters ----
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "Voice":
+        """Build a Voice from a sqlite3.Row (row_factory is set globally
+        in db.get_conn). Used by load() / list_all() / find_by_name()."""
+        return cls(
+            name=row["name"],
+            name_slug=row["name_slug"],
+            duration_s=float(row["duration_s"]),
+            sample_rate=int(row["sample_rate"]),
+            channels=int(row["channels"]),
+            transcript_chars=int(row["transcript_chars"]),
+            notes=row["notes"] or "",
+            created=row["created"] or "",
+            tts_model=row["tts_model"],
+        )
+
+    # ---- IO ----
 
     def save(self) -> None:
-        """Write meta.json. Caller is responsible for placing voice.wav and
-        voice.txt into ``self.dir`` first.
-        """
-        meta = {
-            "name": self.name,
-            "name_slug": self.name_slug,
-            "created": self.created or _utcnow_iso(),
-            "duration_s": round(float(self.duration_s), 3),
-            "sample_rate": int(self.sample_rate),
-            "channels": int(self.channels),
-            "transcript_chars": int(self.transcript_chars),
-            "notes": self.notes,
-            "tts_model": self.tts_model,
-        }
-        self.meta_path.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        """UPSERT into voices. Doesn't touch voice.wav / voice.txt —
+        caller is responsible for placing those next to where ``dir``
+        points before calling save() (Voice.create() does both)."""
+        get_conn().execute(
+            "INSERT INTO voices "
+            "(name_slug, name, duration_s, sample_rate, channels, "
+            " transcript_chars, notes, created, tts_model) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(name_slug) DO UPDATE SET "
+            "  name=excluded.name, "
+            "  duration_s=excluded.duration_s, "
+            "  sample_rate=excluded.sample_rate, "
+            "  channels=excluded.channels, "
+            "  transcript_chars=excluded.transcript_chars, "
+            "  notes=excluded.notes, "
+            "  tts_model=excluded.tts_model",
+            (
+                self.name_slug, self.name,
+                round(float(self.duration_s), 3),
+                int(self.sample_rate), int(self.channels),
+                int(self.transcript_chars), self.notes,
+                self.created or _utcnow_iso(), self.tts_model,
+            ),
         )
 
     @classmethod
-    def load(cls, dir: Path) -> "Voice":
-        """Load a voice from ``voices/<slug>/meta.json``."""
-        meta_path = dir / "meta.json"
-        if not meta_path.exists():
-            raise FileNotFoundError(meta_path)
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        return cls(
-            name=meta["name"],
-            name_slug=meta.get("name_slug") or slugify(meta["name"]),
-            dir=dir,
-            duration_s=float(meta["duration_s"]),
-            sample_rate=int(meta["sample_rate"]),
-            channels=int(meta["channels"]),
-            transcript_chars=int(meta.get("transcript_chars", 0)),
-            notes=meta.get("notes", ""),
-            created=meta.get("created", ""),
-            tts_model=meta.get("tts_model"),
-        )
+    def load(cls, slug: str) -> "Voice":
+        """Load a single voice by slug. Raises FileNotFoundError when no
+        matching row exists — keeps the same exception type the v0.2
+        FS-based load used so callers don't need to change the catch."""
+        row = get_conn().execute(
+            "SELECT name_slug, name, duration_s, sample_rate, channels, "
+            "       transcript_chars, notes, created, tts_model "
+            "FROM voices WHERE name_slug=?",
+            (slug,),
+        ).fetchone()
+        if row is None:
+            raise FileNotFoundError(f"voice not found: {slug}")
+        return cls.from_row(row)
 
     @classmethod
-    def list_all(cls, voices_root: Path) -> list["Voice"]:
-        """Enumerate voices in the library. Skips dirs without a valid
-        meta.json (corrupt entries are silently dropped)."""
-        if not voices_root.exists():
-            return []
-        out: list[Voice] = []
-        for d in sorted(voices_root.iterdir()):
-            if not d.is_dir():
-                continue
-            if not (d / "meta.json").exists():
-                continue
-            try:
-                out.append(cls.load(d))
-            except (json.JSONDecodeError, KeyError, ValueError, FileNotFoundError):
-                continue
-        return out
+    def exists(cls, slug: str) -> bool:
+        """Cheap existence check that doesn't materialize a Voice. Used
+        by routers that just need to validate before a UPDATE / DELETE."""
+        return get_conn().execute(
+            "SELECT 1 FROM voices WHERE name_slug=?", (slug,)
+        ).fetchone() is not None
 
     @classmethod
-    def find_by_name(cls, voices_root: Path, name: str) -> "Voice | None":
-        """Look up by display name. Slug-equivalent names match (e.g. a
-        config that says ``"Lucie Ježková"`` finds ``voices/Lucie_Jezkova/``)."""
+    def list_all(cls) -> list["Voice"]:
+        """Enumerate voices in name-slug order. Returns [] when the
+        library is empty (fresh install)."""
+        rows = get_conn().execute(
+            "SELECT name_slug, name, duration_s, sample_rate, channels, "
+            "       transcript_chars, notes, created, tts_model "
+            "FROM voices ORDER BY name_slug"
+        ).fetchall()
+        return [cls.from_row(r) for r in rows]
+
+    @classmethod
+    def find_by_name(cls, name: str) -> "Voice | None":
+        """Look up by display name OR name_slug — both forms hit. Lets a
+        config that says ``"Lucie Ježková"`` find the row stored under
+        slug ``Lucie_Jezkova`` even though the display name is unique-ish
+        but not the PK."""
         target_slug = slugify(name)
-        for v in cls.list_all(voices_root):
-            if v.name == name or v.name_slug == target_slug:
-                return v
-        return None
+        row = get_conn().execute(
+            "SELECT name_slug, name, duration_s, sample_rate, channels, "
+            "       transcript_chars, notes, created, tts_model "
+            "FROM voices WHERE name=? OR name_slug=?",
+            (name, target_slug),
+        ).fetchone()
+        return cls.from_row(row) if row else None
 
     @classmethod
     def create(
         cls,
-        voices_root: Path,
         name: str,
         wav_src: Path,
         transcript_text: str,
@@ -151,22 +191,24 @@ class Voice:
         overwrite: bool = False,
         tts_model: str | None = None,
     ) -> "Voice":
-        """Create a new voice library entry.
+        """Create a new voice library entry. Copies ``wav_src`` to the
+        canonical voices/<slug>/voice.wav location, writes the
+        transcript verbatim, and inserts the meta row. Slug collision
+        is rejected unless ``overwrite=True``.
 
-        ``wav_src`` is copied into the new voice dir as ``voice.wav`` —
-        caller must convert format upstream (audio.py will provide the
-        24 kHz mono 16-bit converter). Transcript is written verbatim.
-
-        Slug collision is rejected unless ``overwrite=True``.
-        """
+        Atomicity: the FS copy happens BEFORE the INSERT so a failed
+        insert (e.g. unique-slug conflict on a parallel create) doesn't
+        leave a stale WAV behind — the COPY+INSERT pair runs inside a
+        single transaction so both succeed or both fail."""
         slug = slugify(name)
-        target = voices_root / slug
-        if target.exists() and not overwrite:
-            raise FileExistsError(f"voice already exists: {target}")
+        if cls.exists(slug) and not overwrite:
+            raise FileExistsError(f"voice already exists: {slug}")
 
-        target.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(wav_src, target / "voice.wav")
-        (target / "voice.txt").write_text(
+        from audiomat.state import PATHS
+        target_dir = PATHS.voice_dir(slug)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(wav_src, target_dir / "voice.wav")
+        (target_dir / "voice.txt").write_text(
             transcript_text.strip() + "\n",
             encoding="utf-8",
         )
@@ -174,7 +216,6 @@ class Voice:
         voice = cls(
             name=name,
             name_slug=slug,
-            dir=target,
             duration_s=duration_s,
             sample_rate=sample_rate,
             channels=channels,
@@ -187,8 +228,13 @@ class Voice:
         return voice
 
     def delete(self) -> None:
-        """Remove the voice directory. Caller should first verify
-        no active project references this voice (caller-side check)."""
+        """Remove the row + the voice directory. Caller should first
+        verify no active project references this voice (caller-side
+        check — see DELETE /api/voices/{slug} in the router for the
+        replacement flow)."""
+        get_conn().execute(
+            "DELETE FROM voices WHERE name_slug=?", (self.name_slug,)
+        )
         if self.dir.exists():
             shutil.rmtree(self.dir)
 
@@ -200,36 +246,41 @@ def _utcnow_iso() -> str:
 
 
 if __name__ == "__main__":
-    # Smoke test: round-trip a Voice through save/load via tempfile.
-    # `python -m audiomat.voice`
+    # Smoke test: round-trip a Voice through save/load against a tmp
+    # library. `python -m audiomat.voice`
+    import os
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp) / "voices"
-        root.mkdir()
-        # Synthesize a fake voice (write empty wav + txt — enough for round-trip)
-        slug = slugify("Lucie Ježková")
-        (root / slug).mkdir()
-        (root / slug / "voice.wav").write_bytes(b"\x00" * 1024)
-        (root / slug / "voice.txt").write_text("Holohlavá holka.", encoding="utf-8")
-        v = Voice(
+        os.environ["AUDIOMAT_LIBRARY_ROOT"] = tmp
+        # Reload state + db so PATHS picks up the env var and the DB
+        # opens against the tmp library root.
+        import importlib
+        import audiomat.state
+        importlib.reload(audiomat.state)
+        import audiomat.db
+        audiomat.db.close_all()
+
+        # Stage WAV + txt where Voice.create expects to copy from.
+        src_wav = Path(tmp) / "src_voice.wav"
+        src_wav.write_bytes(b"\x00" * 1024)
+
+        v = Voice.create(
             name="Lucie Ježková",
-            name_slug=slug,
-            dir=root / slug,
-            duration_s=10.0,
-            sample_rate=24000,
-            channels=1,
-            transcript_chars=16,
+            wav_src=src_wav,
+            transcript_text="Holohlavá holka.",
+            duration_s=10.0, sample_rate=24000, channels=1,
             notes="smoke test",
         )
-        v.save()
-        # Load + compare
-        loaded = Voice.load(root / slug)
-        print(f"saved   : {v.name} ({v.duration_s}s, {v.sample_rate}Hz)")
+        print(f"created : {v.name} ({v.duration_s}s, slug={v.name_slug})")
+        loaded = Voice.load(v.name_slug)
         print(f"loaded  : {loaded.name} ({loaded.duration_s}s, {loaded.sample_rate}Hz)")
         print(f"transcript: {loaded.transcript()!r}")
         print(f"is_valid : {loaded.is_valid}")
-        # list_all
-        print(f"list_all : {[v.name for v in Voice.list_all(root)]}")
-        # find_by_name
-        found = Voice.find_by_name(root, "Lucie Ježková")
-        print(f"find     : {found.name if found else None}")
+        print(f"list_all : {[x.name for x in Voice.list_all()]}")
+        found = Voice.find_by_name("Lucie Ježková")
+        print(f"find    : {found.name if found else None}")
+        loaded.delete()
+        print(f"after delete: list_all={Voice.list_all()}")
+        # Release the DB handle so the tempdir can be cleaned up on
+        # Windows (open SQLite file blocks rmtree).
+        audiomat.db.close_all()

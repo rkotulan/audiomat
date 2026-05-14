@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/voices", tags=["voices"])
 
 @router.get("", response_model=list[VoiceOut])
 def list_voices():
-    return [VoiceOut.from_voice(v) for v in Voice.list_all(PATHS.voices_root)]
+    return [VoiceOut.from_voice(v) for v in Voice.list_all()]
 
 
 @router.post("/auto-transcribe")
@@ -403,7 +403,6 @@ async def create_voice(
 
     try:
         voice = Voice.create(
-            voices_root=PATHS.voices_root,
             name=name.strip(),
             wav_src=src,
             transcript_text=transcript,
@@ -431,10 +430,10 @@ def update_voice_model(slug: str, req: VoiceModelRequest):
     manifest signature already includes voice slug + params (see
     ProjectRenderer._params_signature) so a model swap will trigger
     re-synth on next render automatically."""
-    target = PATHS.voice_dir(slug)
-    if not (target / "meta.json").exists():
+    try:
+        v = Voice.load(slug)
+    except FileNotFoundError:
         raise HTTPException(404, f"voice not found: {slug}")
-    v = Voice.load(target)
     tts_model_clean = (req.tts_model or "").strip()
     if not tts_model_clean or tts_model_clean == "default":
         tts_model_clean = None
@@ -445,10 +444,10 @@ def update_voice_model(slug: str, req: VoiceModelRequest):
 
 @router.get("/{slug}", response_model=VoiceOut)
 def get_voice(slug: str):
-    target = PATHS.voice_dir(slug)
-    if not (target / "meta.json").exists():
+    try:
+        return VoiceOut.from_voice(Voice.load(slug))
+    except FileNotFoundError:
         raise HTTPException(404, f"voice not found: {slug}")
-    return VoiceOut.from_voice(Voice.load(target))
 
 
 @router.delete("/{slug}")
@@ -469,8 +468,9 @@ def delete_voice(slug: str, replacement: str | None = None):
     The replacement must exist in the library and must not be the
     voice being deleted (no self-swap).
     """
-    target = PATHS.voice_dir(slug)
-    if not target.exists():
+    try:
+        voice = Voice.load(slug)
+    except FileNotFoundError:
         raise HTTPException(404, f"voice not found: {slug}")
 
     referencing_projects = [
@@ -494,17 +494,17 @@ def delete_voice(slug: str, replacement: str | None = None):
     if referencing_projects:
         if replacement == slug:
             raise HTTPException(400, "replacement cannot equal the voice being deleted")
-        replacement_dir = PATHS.voice_dir(replacement)
-        if not (replacement_dir / "meta.json").exists():
+        try:
+            new_voice = Voice.load(replacement)
+        except FileNotFoundError:
             raise HTTPException(404, f"replacement voice not found: {replacement}")
-        new_voice = Voice.load(replacement_dir)
         for proj in referencing_projects:
             proj.voice_ref = new_voice.name
             proj.voice_ref_slug = new_voice.name_slug
             proj.save()
             replaced_in.append(proj.name_slug)
 
-    Voice.load(target).delete()
+    voice.delete()
     return {
         "deleted": slug,
         "replacement": replacement if replaced_in else None,

@@ -48,7 +48,7 @@ async def start_render(
         raise HTTPException(409, "render already in progress for this project")
 
     proj = load_project_or_404(slug)
-    voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
+    voice = Voice.find_by_name(proj.voice_ref)
     if voice is None:
         raise HTTPException(404, f"voice not found: {proj.voice_ref}")
 

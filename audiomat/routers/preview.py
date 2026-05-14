@@ -137,7 +137,7 @@ def preview_matrix(slug: str):
     # client gets a 4xx without entering the SSE stream and seeing an
     # "error" event mid-flight.
     proj = load_project_or_404(slug)
-    voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
+    voice = Voice.find_by_name(proj.voice_ref)
     if voice is None:
         raise HTTPException(404, f"voice not found: {proj.voice_ref}")
     if not proj.book_path.exists():
@@ -331,10 +331,10 @@ def preview_voices(slug: str, req: PreviewVoicesRequest):
 
     voices: list[Voice] = []
     for vs in req.voice_slugs:
-        vdir = PATHS.voice_dir(vs)
-        if not (vdir / "meta.json").exists():
+        try:
+            voices.append(Voice.load(vs))
+        except FileNotFoundError:
             raise HTTPException(404, f"voice not found: {vs}")
-        voices.append(Voice.load(vdir))
 
     blocks = _parse_blocks(proj)
     picked = _pick_sample_text(blocks, blocks_skipped=proj.book.blocks_skipped)
@@ -463,7 +463,7 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
     persisted to project.params). Lets the user A/B custom slider values
     before committing. Cached per (text, params, voice_slug)."""
     proj = load_project_or_404(slug)
-    voice = Voice.find_by_name(PATHS.voices_root, proj.voice_ref)
+    voice = Voice.find_by_name(proj.voice_ref)
     if voice is None:
         raise HTTPException(404, f"voice not found: {proj.voice_ref}")
     if not proj.book_path.exists():

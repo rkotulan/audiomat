@@ -25,6 +25,12 @@ def isolated_library(tmp_path: Path, monkeypatch) -> Path:
     a previously-silent cross-test bug.
     """
     monkeypatch.setenv("AUDIOMAT_LIBRARY_ROOT", str(tmp_path))
+    # Close any cached DB connections from prior tests — they were
+    # opened against the previous tmp_path and would silently route
+    # writes to the wrong library otherwise.
+    import audiomat.db
+    audiomat.db.close_all()
+
     import importlib
     import audiomat.state
     importlib.reload(audiomat.state)
@@ -32,3 +38,4 @@ def isolated_library(tmp_path: Path, monkeypatch) -> Path:
         if name.startswith("audiomat.routers."):
             importlib.reload(sys.modules[name])
     yield tmp_path
+    audiomat.db.close_all()

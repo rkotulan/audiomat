@@ -21,23 +21,20 @@ def _client(isolated_library):
 
 
 def _make_voice(library_root: Path, slug: str, display_name: str) -> None:
-    """Create a minimal voice entry on disk so list/load/delete see it.
-    voice.wav is a zero-filled stub — we never run TTS in these tests."""
+    """Create a minimal voice entry: row in the voices table + voice.wav
+    + voice.txt on disk where Voice.dir expects them. voice.wav is a
+    zero-filled stub — we never run TTS in these tests."""
     vdir = library_root / "voices" / slug
     vdir.mkdir(parents=True, exist_ok=True)
     (vdir / "voice.wav").write_bytes(b"\x00" * 256)
     (vdir / "voice.txt").write_text("any transcript", encoding="utf-8")
-    (vdir / "meta.json").write_text(json.dumps({
-        "name": display_name,
-        "name_slug": slug,
-        "created": "2026-05-13T00:00:00Z",
-        "duration_s": 8.0,
-        "sample_rate": 24000,
-        "channels": 1,
-        "transcript_chars": 14,
-        "notes": "",
-        "tts_model": None,
-    }, ensure_ascii=False), encoding="utf-8")
+    from audiomat.db import get_conn
+    get_conn().execute(
+        "INSERT INTO voices (name_slug, name, duration_s, sample_rate, "
+        "channels, transcript_chars, notes, created, tts_model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (slug, display_name, 8.0, 24000, 1, 14, "", "2026-05-13T00:00:00Z", None),
+    )
 
 
 def _make_project(library_root: Path, slug: str, voice_name: str, voice_slug: str) -> None:
@@ -95,8 +92,10 @@ def test_delete_in_use_without_replacement_returns_structured_409(isolated_libra
     assert isinstance(detail, dict), f"expected structured detail, got {detail!r}"
     assert "message" in detail
     assert detail["referencing_projects"] == [{"slug": "myproject", "name": "myproject"}]
-    # Voice still exists — failed delete must not be partial.
-    assert (isolated_library / "voices" / "alice" / "meta.json").exists()
+    # Voice still exists in DB — failed delete must not be partial.
+    from audiomat.voice import Voice
+    assert Voice.exists("alice")
+    assert (isolated_library / "voices" / "alice" / "voice.wav").exists()
 
 
 def test_delete_with_replacement_swaps_projects_and_removes_voice(isolated_library):
@@ -152,4 +151,6 @@ def test_delete_unused_voice_ignores_replacement_param(isolated_library):
     assert r.json()["replacement"] is None
     assert r.json()["replaced_in"] == []
     # Replacement voice untouched.
-    assert (isolated_library / "voices" / "bob" / "meta.json").exists()
+    from audiomat.voice import Voice
+    assert Voice.exists("bob")
+    assert (isolated_library / "voices" / "bob" / "voice.wav").exists()

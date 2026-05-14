@@ -133,7 +133,7 @@ async def create_project(
     """
     if not name.strip():
         raise HTTPException(400, "name is required")
-    voice = Voice.find_by_name(PATHS.voices_root, voice_ref)
+    voice = Voice.find_by_name(voice_ref)
     if voice is None:
         raise HTTPException(404, f"voice not found: {voice_ref}")
 
@@ -277,10 +277,10 @@ def update_project_voice(slug: str, req: ProjectVoiceRequest):
     to the previous voice with no work.
     """
     proj = load_project_or_404(slug)
-    vdir = PATHS.voice_dir(req.voice_slug)
-    if not (vdir / "meta.json").exists():
+    try:
+        voice = Voice.load(req.voice_slug)
+    except FileNotFoundError:
         raise HTTPException(404, f"voice not found: {req.voice_slug}")
-    voice = Voice.load(vdir)
     proj.voice_ref = voice.name
     proj.voice_ref_slug = voice.name_slug
     proj.save()
