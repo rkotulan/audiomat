@@ -43,8 +43,30 @@ from audiomat.state import PATHS, clear_tts, idle_unload_loop
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Set up runtime dirs + idle-unload background task on startup;
-    tear down resources on shutdown."""
+    tear down resources on shutdown.
+
+    Also runs the v0.2 → v0.3 SQLite migration if the library still has
+    JSON state files lying around. The migration is idempotent and
+    safe to call on a fresh install (zero JSON candidates → zero work).
+    Wrapped in try/except so a migration failure logs loudly but
+    doesn't block server startup — operators can recover via the CLI.
+    """
     PATHS.ensure_dirs()
+
+    try:
+        from audiomat.migrations.v0_3_sqlite import migrate_v0_2_to_v0_3
+        report = migrate_v0_2_to_v0_3(PATHS.library_root)
+        if not report.empty:
+            import logging as _log
+            _log.getLogger("audiomat").info(
+                "v0.2 → v0.3 migration: %s", report,
+            )
+    except Exception as e:  # noqa: BLE001
+        import logging as _log
+        _log.getLogger("audiomat").exception(
+            "v0.2 → v0.3 migration failed (server starting anyway): %s", e,
+        )
+
     idle_task = asyncio.create_task(idle_unload_loop(), name="audiomat-idle-unload")
     try:
         yield
