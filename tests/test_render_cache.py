@@ -1,16 +1,14 @@
-"""Tests for the per-chunk manifest cache schema in audiomat.render.
+"""Tests for the per-chunk manifest cache (v0.3 SQLite-backed) +
+:meth:`ProjectRenderer._params_signature` invariants.
 
-Focuses on the cache-key correctness fix: voice + render-param changes
-must invalidate cached chunks instead of silently returning stale audio.
+Focus: voice + render-param changes must invalidate cached chunks
+instead of silently returning stale audio. The renderer's full
+pipeline can't run without a GPU + the OmniVoice model, so we
+exercise the helpers directly.
 
-The renderer's full pipeline can't run without a GPU + the OmniVoice
-model, so we exercise the helpers directly:
-
-  * :func:`_load_manifest` / :func:`_save_manifest` round-trip the new
-    ``{wav_name: {"text", "sig"}}`` schema and tolerate the legacy
-    bare-string format (treated as a cache miss).
-  * :meth:`ProjectRenderer._params_signature` is deterministic for
-    identical inputs and changes when any one input flips.
+v0.2 used per-chapter manifest.json files; v0.3 stores one row per
+chunk in the chunk_manifest table. Same cache invariants — just a
+different storage layer.
 """
 from __future__ import annotations
 
@@ -19,51 +17,75 @@ from pathlib import Path
 
 from audiomat.render import (
     ProjectRenderer,
-    _load_manifest,
-    _save_manifest,
+    _delete_chunk_entry,
+    _get_chunk_entry,
+    _put_chunk_entry,
 )
 
 
 # ----------------------------------------------------------------------------
-# Manifest schema round-trip
+# chunk_manifest UPSERT round-trip
 # ----------------------------------------------------------------------------
 
 
-class TestManifestRoundTrip:
-    def test_empty_manifest(self, tmp_path: Path):
-        assert _load_manifest(tmp_path) == {}
+class TestChunkManifestRoundTrip:
+    """Exercises the per-chunk SQL helpers against the isolated_library
+    fixture (which sets AUDIOMAT_LIBRARY_ROOT and reloads modules so
+    db.get_conn() opens against the tmp DB)."""
 
-    def test_save_then_load_new_schema(self, tmp_path: Path):
-        original = {
-            "chunk_0000.wav": {"text": "Ahoj.", "sig": "abc123def456"},
-            "chunk_0001.wav": {"text": "Jak se máš?", "sig": "abc123def456"},
-        }
-        _save_manifest(tmp_path, original)
-        loaded = _load_manifest(tmp_path)
-        assert loaded == original
-
-    def test_load_legacy_string_schema(self, tmp_path: Path):
-        # Pre-fix manifests stored bare strings instead of dicts. Loader
-        # passes them through unchanged; render_block treats any non-dict
-        # value as a cache miss.
-        legacy = {"chunk_0000.wav": "Ahoj."}
-        (tmp_path / "manifest.json").write_text('{"chunk_0000.wav": "Ahoj."}', encoding="utf-8")
-        loaded = _load_manifest(tmp_path)
-        assert loaded == legacy
-        assert not isinstance(loaded["chunk_0000.wav"], dict), (
-            "legacy schema must NOT be auto-promoted; render_block keys on isinstance(_, dict)"
+    def _seed_project(self):
+        """We only need a row in projects to satisfy the FK on
+        chunk_manifest.project_slug — no on-disk dir required for
+        these unit tests."""
+        from audiomat.db import get_conn
+        get_conn().execute(
+            "INSERT INTO projects "
+            "(name_slug, name, book_filename, book_blocks_total, "
+            " voice_ref, voice_ref_slug, status_phase, "
+            " status_chapters_done, status_chapters_total, created, "
+            " params_json) "
+            "VALUES ('p1', 'P1', 'b.epub', 10, 'V', 'v', 'draft', "
+            "0, 0, '2026-05-14', '{}')"
         )
 
-    def test_corrupt_manifest_returns_empty(self, tmp_path: Path):
-        (tmp_path / "manifest.json").write_text("not json {{", encoding="utf-8")
-        assert _load_manifest(tmp_path) == {}
+    def test_empty_lookup_returns_none(self, isolated_library):
+        self._seed_project()
+        assert _get_chunk_entry("p1", "001_Foo", "chunk_0000.wav") is None
 
-    def test_atomic_write_no_partial_file(self, tmp_path: Path):
-        # _save_manifest writes to .tmp then renames. The tmp file must
-        # not survive a successful write.
-        _save_manifest(tmp_path, {"chunk_0000.wav": {"text": "x", "sig": "y"}})
-        assert not (tmp_path / "manifest.json.tmp").exists()
-        assert (tmp_path / "manifest.json").exists()
+    def test_put_then_get(self, isolated_library):
+        self._seed_project()
+        _put_chunk_entry("p1", "001_Foo", "chunk_0000.wav",
+                          "Ahoj.", "abc123def456", gen_seconds=1.5)
+        got = _get_chunk_entry("p1", "001_Foo", "chunk_0000.wav")
+        assert got == ("Ahoj.", "abc123def456")
+
+    def test_put_upsert_replaces_existing(self, isolated_library):
+        """Hot path: re-render overwrites the row in place. Sig changes
+        when params change — verify the new sig sticks."""
+        self._seed_project()
+        _put_chunk_entry("p1", "001_Foo", "chunk_0000.wav",
+                          "Ahoj.", "sig_v1", gen_seconds=1.0)
+        _put_chunk_entry("p1", "001_Foo", "chunk_0000.wav",
+                          "Ahoj.", "sig_v2", gen_seconds=2.0)
+        got = _get_chunk_entry("p1", "001_Foo", "chunk_0000.wav")
+        assert got == ("Ahoj.", "sig_v2")
+
+    def test_delete_removes_only_target(self, isolated_library):
+        self._seed_project()
+        _put_chunk_entry("p1", "001_Foo", "chunk_0000.wav", "a", "s")
+        _put_chunk_entry("p1", "001_Foo", "chunk_0001.wav", "b", "s")
+        _delete_chunk_entry("p1", "001_Foo", "chunk_0000.wav")
+        assert _get_chunk_entry("p1", "001_Foo", "chunk_0000.wav") is None
+        assert _get_chunk_entry("p1", "001_Foo", "chunk_0001.wav") == ("b", "s")
+
+    def test_project_delete_cascades_chunks(self, isolated_library):
+        """ON DELETE CASCADE on project_slug FK means dropping a project
+        cleans up its chunks without an explicit purge step."""
+        self._seed_project()
+        _put_chunk_entry("p1", "001_Foo", "chunk_0000.wav", "a", "s")
+        from audiomat.db import get_conn
+        get_conn().execute("DELETE FROM projects WHERE name_slug='p1'")
+        assert _get_chunk_entry("p1", "001_Foo", "chunk_0000.wav") is None
 
 
 # ----------------------------------------------------------------------------

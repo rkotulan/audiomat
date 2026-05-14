@@ -3,9 +3,10 @@
 Ties the rest of the pipeline together: per-chapter chunks via
 :mod:`audiomat.chunker`, header pause-injection via :mod:`audiomat.headers`,
 generation via :mod:`audiomat.tts`, concat + loudness via
-:mod:`audiomat.audio`. Persistence is handled here — manifest written
-**per chunk** (not per chapter, fixing the CLAUDE.md gotcha #render_omnivoice
-mid-chapter cache loss).
+:mod:`audiomat.audio`. Manifest persistence is handled here — one row per
+chunk in the ``chunk_manifest`` table (v0.3 migration of the v0.2
+per-chapter manifest.json), UPSERTed after each chunk synth so a crash
+mid-chapter only loses the in-flight chunk.
 
 The renderer is structured as a generator: callers iterate
 :meth:`ProjectRenderer.render_all` to receive :class:`ProgressEvent` objects
@@ -13,14 +14,15 @@ as work progresses. The FastAPI layer maps these events into an SSE stream.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
-import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterator
 
 from audiomat.audio import concat_chunks_loudnorm
 from audiomat.chunker import make_chunks
+from audiomat.db import get_conn
 from audiomat.epub import Block
 from audiomat.headers import inject_header_pause
 from audiomat.project import Project
@@ -71,46 +73,69 @@ class ProgressEvent:
 
 
 # ----------------------------------------------------------------------------
-# Manifest helpers (per-chunk crash-safe persistence)
+# Manifest helpers (per-chunk SQL — v0.3 migration of v0.2 manifest.json)
 # ----------------------------------------------------------------------------
 
 
-def _manifest_path(chap_dir: Path) -> Path:
-    return chap_dir / "manifest.json"
+def _utcnow_iso() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _load_manifest(chap_dir: Path) -> dict[str, dict]:
-    """Read manifest.json. Returns empty dict on missing / corrupt file.
+def _get_chunk_entry(
+    project_slug: str, stem: str, chunk_name: str,
+) -> tuple[str, str] | None:
+    """Look up the cached (text, sig) for one chunk. Returns None when
+    the row doesn't exist — render_block treats that as a cache miss
+    and re-synthesizes.
 
-    Schema: ``{wav_name: {"text": str, "sig": str}}``. The ``sig`` field
-    is a 16-char hex digest of every render param that affects audio
-    output (voice slug + voice WAV mtime + num_step + guidance_scale +
-    speed + language) so a voice / params change invalidates the cache
-    instead of silently returning stale audio (CLAUDE.md gotcha fix).
-
-    Backward compat: pre-fix manifests were ``{wav_name: text_string}``.
-    Older entries are kept as-is in the dict; the cache check below
-    treats any non-dict value as a cache miss and re-synthesizes —
-    safer than guessing what the original sig would have been.
+    The sig is a 16-char hex digest of every render param that affects
+    audio output (voice slug + voice WAV mtime + num_step + gs + speed
+    + language + pronunciations dict). A change in any of those shows
+    up here as a stored sig != current sig → invalidate.
     """
-    p = _manifest_path(chap_dir)
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
+    row = get_conn().execute(
+        "SELECT text, sig FROM chunk_manifest "
+        "WHERE project_slug=? AND stem=? AND chunk_name=?",
+        (project_slug, stem, chunk_name),
+    ).fetchone()
+    return (row["text"], row["sig"]) if row else None
 
 
-def _save_manifest(chap_dir: Path, manifest: dict[str, dict]) -> None:
-    """Write manifest.json atomically (write to .tmp, then rename)."""
-    p = _manifest_path(chap_dir)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+def _put_chunk_entry(
+    project_slug: str, stem: str, chunk_name: str,
+    text: str, sig: str, gen_seconds: float | None = None,
+) -> None:
+    """UPSERT one chunk row. Called per chunk synth — replaces the v0.2
+    "load JSON, mutate dict, write whole file" pattern with a single
+    statement that's atomic at the storage layer (no .tmp + rename
+    dance needed).
+
+    ``gen_seconds`` is the wall-clock the TTS call took. Stored so the
+    ETA estimator can answer "how long did this chunk take last time?"
+    without having to keep a separate sidecar file.
+    """
+    get_conn().execute(
+        "INSERT INTO chunk_manifest "
+        "(project_slug, stem, chunk_name, text, sig, gen_seconds, created) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(project_slug, stem, chunk_name) DO UPDATE SET "
+        "  text=excluded.text, "
+        "  sig=excluded.sig, "
+        "  gen_seconds=excluded.gen_seconds",
+        (project_slug, stem, chunk_name, text, sig, gen_seconds, _utcnow_iso()),
     )
-    tmp.replace(p)
+
+
+def _delete_chunk_entry(
+    project_slug: str, stem: str, chunk_name: str,
+) -> None:
+    """Drop one chunk row. Used by orphan cleanup when chunking shrunk
+    between renders."""
+    get_conn().execute(
+        "DELETE FROM chunk_manifest "
+        "WHERE project_slug=? AND stem=? AND chunk_name=?",
+        (project_slug, stem, chunk_name),
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -221,7 +246,7 @@ class ProjectRenderer:
 
         chunk_texts = self._chunk_text_for(block)
         chunk_total = len(chunk_texts)
-        manifest = _load_manifest(chap_dir)
+        proj_slug = self.project.name_slug
         sig = self._params_signature()
 
         # Skip the whole chapter if the final WAV already exists AND all
@@ -232,13 +257,11 @@ class ProjectRenderer:
         for j, text in enumerate(chunk_texts):
             wav_name = f"chunk_{j:04d}.wav"
             wav_path = chunks_dir / wav_name
-            entry = manifest.get(wav_name)
-            # New schema: {text, sig}. Old schema: bare text string —
-            # treated as a miss so the voice/params change that triggered
-            # the schema upgrade actually re-renders.
-            if isinstance(entry, dict):
-                text_unchanged = (entry.get("text") == text)
-                sig_unchanged = (entry.get("sig") == sig)
+            entry = _get_chunk_entry(proj_slug, stem, wav_name)
+            if entry is not None:
+                stored_text, stored_sig = entry
+                text_unchanged = (stored_text == text)
+                sig_unchanged = (stored_sig == sig)
             else:
                 text_unchanged = sig_unchanged = False
             wav_present = wav_path.exists() and wav_path.stat().st_size > 1024
@@ -294,11 +317,14 @@ class ProjectRenderer:
                 result.sample_rate,
                 subtype="PCM_16",
             )
-            # Persist manifest AFTER each chunk — crash-safe. Schema is
-            # {text, sig}; sig captures voice + params so a later run
-            # with different settings invalidates this entry.
-            manifest[wav_name] = {"text": text, "sig": sig}
-            _save_manifest(chap_dir, manifest)
+            # Persist AFTER each chunk — crash-safe. UPSERT into
+            # chunk_manifest is atomic at the SQLite layer; sig captures
+            # voice + params so a later run with different settings
+            # invalidates this row on next read.
+            _put_chunk_entry(
+                proj_slug, stem, wav_name, text, sig,
+                gen_seconds=result.gen_seconds,
+            )
             chunk_paths.append(wav_path)
 
             yield ProgressEvent(
@@ -321,10 +347,8 @@ class ProjectRenderer:
         for orphan in sorted(chunks_dir.glob("chunk_*.wav")):
             if orphan.name not in expected_names:
                 orphan.unlink()
-                manifest.pop(orphan.name, None)
+                _delete_chunk_entry(proj_slug, stem, orphan.name)
                 orphans_removed = True
-        if orphans_removed:
-            _save_manifest(chap_dir, manifest)
 
         # If everything was cached AND the final WAV exists, skip the concat.
         if all_cached and final_wav.exists() and final_wav.stat().st_size > 1024 and not orphans_removed:
