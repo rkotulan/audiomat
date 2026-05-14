@@ -40,6 +40,24 @@ export interface HFTokenStatus {
   source: 'env' | 'secrets_file' | null
 }
 
+export interface BackupSize {
+  essentials_bytes: number
+  renders_bytes: number
+  finals_bytes: number
+  file_counts: { essentials?: number; renders?: number; finals?: number }
+}
+
+export interface RestoreResult {
+  files_extracted: number
+  bytes_extracted: number
+  // Absolute path to the auto-snapshot of pre-restore essentials.
+  // Surfaced in the success message so the user knows where rollback
+  // material lives (or null if the snapshot couldn't be written —
+  // restore still proceeded).
+  pre_restore_snapshot: string | null
+  warnings: string[]
+}
+
 export interface BookInfo {
   filename: string
   blocks_total: number

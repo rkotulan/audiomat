@@ -2,6 +2,7 @@
 // Vite proxies /api → :8000 in dev, so we can use relative paths everywhere.
 import type {
   AnalyzeResult,
+  BackupSize,
   ChapterText,
   ChaptersResponse,
   CustomPreviewResult,
@@ -14,6 +15,7 @@ import type {
   PreviewVoicesMatrix,
   Project,
   ProgressEvent,
+  RestoreResult,
   StagedVoicePreview,
   TTSModel,
   Voice,
@@ -369,6 +371,33 @@ export const resetVoiceValidationText = (): Promise<VoiceValidationText> =>
   fetch(`${BASE}/settings/voice-validation-text`, { method: 'DELETE' }).then(
     ok<VoiceValidationText>,
   )
+
+// ---- Backup / restore ----
+
+export const backupPreview = (): Promise<BackupSize> =>
+  fetch(`${BASE}/backup/preview`).then(ok<BackupSize>)
+
+/** Returns the absolute /api URL to start a backup download. We don't
+ *  fetch through ok() here — the response is a multi-MB ZIP stream
+ *  that the browser downloads via an <a href> click instead. */
+export function backupDownloadUrl(args: {
+  includeRenders: boolean
+  includeFinals: boolean
+}): string {
+  const qs = new URLSearchParams({
+    include_renders: args.includeRenders ? 'true' : 'false',
+    include_finals: args.includeFinals ? 'true' : 'false',
+  })
+  return `${BASE}/backup/export?${qs}`
+}
+
+export async function backupRestore(file: File): Promise<RestoreResult> {
+  const fd = new FormData()
+  fd.append('archive', file)
+  return fetch(`${BASE}/backup/restore`, { method: 'POST', body: fd }).then(
+    ok<RestoreResult>,
+  )
+}
 
 // ---- projects ----
 

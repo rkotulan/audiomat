@@ -337,3 +337,26 @@ class VoiceValidationTextRequest(BaseModel):
     persists across uploads + browsers (single library = single value).
     Use DELETE to clear the override."""
     text: str
+
+
+# ----------------------------------------------------------------------------
+# Backup / restore
+# ----------------------------------------------------------------------------
+
+
+class BackupSizeOut(BaseModel):
+    """GET /api/backup/preview response. Lets the UI show a size badge
+    on each toggle so the user knows what they're committing to before
+    they click Download. Sizes in bytes — frontend formats."""
+    essentials_bytes: int
+    renders_bytes: int
+    finals_bytes: int
+    file_counts: dict           # {"essentials": int, "renders": int, "finals": int}
+
+
+class RestoreOut(BaseModel):
+    """POST /api/backup/restore response after a successful restore."""
+    files_extracted: int
+    bytes_extracted: int
+    pre_restore_snapshot: str | None
+    warnings: list[str]

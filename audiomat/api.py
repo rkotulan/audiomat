@@ -28,6 +28,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import asyncio
 
 from audiomat.routers import (
+    backup,
     chapters,
     models,
     preview,
@@ -110,6 +111,7 @@ app.include_router(projects.router)
 app.include_router(preview.router)
 app.include_router(chapters.router)
 app.include_router(render.router)
+app.include_router(backup.router)
 
 
 # ----------------------------------------------------------------------------
