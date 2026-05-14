@@ -83,23 +83,41 @@ C:\Dev\audiomat\
 
 ```
 ~/audiomat/                       (Docker volume: /data/)
-├── voices/<slug>/                ← shared library
-│   ├── voice.wav                 ← 24 kHz mono 16-bit, 5–10 s
-│   ├── voice.txt                 ← matching transcript
-│   └── meta.json
+├── audiomat.db                   ← SQLite (v0.3+): voices, projects,
+│                                   project_blocks_skipped, chunk_manifest
+├── audiomat.db-wal / -shm        ← WAL sidecars (non-load-bearing,
+│                                   excluded from backups)
+├── secrets.json                  ← HF token (mode 0o600)
+├── settings.json                 ← non-sensitive prefs (voice
+│                                   validation text)
+├── voices/<slug>/                ← shared library (binaries on disk;
+│   ├── voice.wav                   meta moved into voices table v0.3)
+│   └── voice.txt
 ├── projects/<slug>/              ← per-book, self-contained
-│   ├── config.json               ← params, status, voice ref pointer
-│   ├── book.epub                 ← copied on import
-│   ├── chunks/<NNN_stem>/        ← OmniVoice render output
-│   │   ├── chunks/chunk_NNNN.wav
-│   │   ├── manifest.json         ← {chunk_NNNN.wav: <text it was synthesized from>}
-│   │   └── <NNN_stem>.wav        ← loudnorm-ed concat
+│   ├── book.epub                 ← copied on import (v0.3 dropped
+│   │                               config.json — moved to projects table)
+│   ├── chunks/<NNN_stem>/        ← OmniVoice render output (v0.3 dropped
+│   │   ├── chunks/chunk_NNNN.wav   manifest.json — moved to chunk_manifest)
+│   │   └── <NNN_stem>.wav
+│   ├── chapters/<stem>.txt       ← per-chapter text overrides
+│   ├── pronunciations.json       ← per-project pronunciation dict
 │   ├── final.m4b
 │   └── render_log.txt
-└── cache/                        ← HF model cache (~3 GB OmniVoice)
+├── cache/                        ← HF model cache (~3 GB OmniVoice;
+│                                   excluded from backup + restore wipe)
+└── *.v0-2-backup                 ← frozen snapshots of v0.2 JSON files
+                                    (left after one-shot migration; safe
+                                    to delete once v0.3 is proven)
 ```
 
 Override library root via env: `AUDIOMAT_LIBRARY_ROOT=/data` (Docker).
+
+### v0.2 → v0.3 SQLite migration
+
+Auto-runs at startup via `audiomat/migrations/v0_3_sqlite.py`. Walks
+the v0.2 JSONs, INSERTs into the new tables, renames originals to
+`<file>.v0-2-backup`. Idempotent — second startup is a no-op. Direct
+CLI: `python -m audiomat.migrations.v0_3_sqlite [--dry-run]`.
 
 ## API surface (`audiomat/api.py`)
 

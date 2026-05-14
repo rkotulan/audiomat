@@ -3,4 +3,4 @@
 See README.md for project status and architecture.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
