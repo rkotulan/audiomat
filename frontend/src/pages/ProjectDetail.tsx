@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -47,6 +47,7 @@ import {
   deleteProject,
   getProject,
   listChapters,
+  listModels,
   listVoices,
   previewCustom,
   previewMatrix,
@@ -71,6 +72,7 @@ import type {
   PreviewVoicesMatrix,
   Project,
   ProgressEvent,
+  TTSModel,
   Voice,
   VoicePreviewCell,
 } from '@/lib/types'
@@ -1177,6 +1179,7 @@ function VoiceTab({
   onVersionConflict: () => void
 }) {
   const [voices, setVoices] = useState<Voice[] | null>(null)
+  const [models, setModels] = useState<TTSModel[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [matrix, setMatrix] = useState<PreviewVoicesMatrix | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1185,12 +1188,29 @@ function VoiceTab({
   const [cellsDone, setCellsDone] = useState(0)
   const [cellsTotal, setCellsTotal] = useState(0)
 
-  // Load voice library and seed selection: project's current voice +
-  // up to 3 most recent (by created date desc). User can re-tick.
+  // Look up which model (and therefore which license) backs a voice.
+  // Cells with non-commercial backing models get a warning badge so
+  // the user knows what they're about to commit the project to.
+  const modelBySlug = useMemo(() => {
+    const map = new Map<string, TTSModel>()
+    for (const m of models) map.set(m.name_slug, m)
+    return map
+  }, [models])
+
+  const licenseForVoice = (voiceSlug: string): 'permissive' | 'non_commercial' | null => {
+    const v = voices?.find((x) => x.name_slug === voiceSlug)
+    if (!v || !v.tts_model) return null
+    const m = modelBySlug.get(v.tts_model)
+    return m ? m.license : null
+  }
+
+  // Load voice library + models and seed selection: project's current
+  // voice + up to 3 most recent (by created date desc). User can re-tick.
   useEffect(() => {
-    listVoices()
-      .then((vs) => {
+    Promise.all([listVoices(), listModels().catch(() => [])])
+      .then(([vs, ms]) => {
         setVoices(vs)
+        setModels(ms)
         const seed = new Set<string>()
         if (project.voice_ref_slug) seed.add(project.voice_ref_slug)
         const sorted = [...vs].sort((a, b) => b.created.localeCompare(a.created))
@@ -1333,6 +1353,15 @@ function VoiceTab({
                         onCheckedChange={() => toggleVoice(v.name_slug)}
                       />
                       <span className="flex-1 truncate">{v.name}</span>
+                      {licenseForVoice(v.name_slug) === 'non_commercial' && (
+                        <Badge
+                          variant="outline"
+                          className="font-normal border-amber-500/60 text-amber-700 dark:text-amber-300 bg-amber-500/10 text-xs"
+                          title="Voice uses a non-commercial model"
+                        >
+                          NC
+                        </Badge>
+                      )}
                       {v.name_slug === project.voice_ref_slug && (
                         <Badge variant="default" className="font-normal">
                           <Star className="h-3 w-3" /> current
@@ -1398,6 +1427,15 @@ function VoiceTab({
                 <CardTitle className="flex items-center justify-between">
                   <span className="flex items-center gap-2">
                     {cell.voice_name}
+                    {licenseForVoice(cell.voice_slug) === 'non_commercial' && (
+                      <Badge
+                        variant="outline"
+                        className="font-normal border-amber-500/60 text-amber-700 dark:text-amber-300 bg-amber-500/10"
+                        title="Rendered via a non-commercial model"
+                      >
+                        non-commercial
+                      </Badge>
+                    )}
                     {isCurrent(cell) && (
                       <Badge variant="default" className="font-normal">
                         <Star className="h-3 w-3" /> current
