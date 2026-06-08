@@ -246,18 +246,21 @@ def preview_matrix(slug: str):
                         "duration_s": wav_duration_s(wav_path),
                     }
                 else:
-                    t0 = time.time()
-                    audios = tts._model.generate(
-                        text=clean,
-                        language=language,
-                        ref_text=ref_text,
-                        ref_audio=ref_audio,
-                        num_step=variant["num_step"],
-                        guidance_scale=variant["guidance_scale"],
-                        speed=variant["speed"],
+                    # Use the high-level backend-agnostic generate() so
+                    # the same code works on OmniVoice and Higgs. Build
+                    # a per-cell RenderParams (matrix is a num_step/gs
+                    # A/B at the project's chosen speed) — params Higgs
+                    # ignores anyway, but OmniVoice needs them.
+                    from audiomat.project import RenderParams as _RP
+                    cell_params = _RP(
+                        num_step=int(variant["num_step"]),
+                        guidance_scale=float(variant["guidance_scale"]),
+                        speed=float(variant["speed"]),
                     )
+                    t0 = time.time()
+                    result = tts.generate(clean, voice, cell_params, language=language)
                     gen_s = time.time() - t0
-                    sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+                    sf.write(str(wav_path), result.audio, result.sample_rate, subtype="PCM_16")
                     gen_times[wav_path.name] = round(gen_s, 2)
                     gen_times_dirty = True
                     cell = {
@@ -265,7 +268,7 @@ def preview_matrix(slug: str):
                         "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
                         "cached": False,
                         "gen_seconds": round(gen_s, 2),
-                        "duration_s": round(audios[0].shape[-1] / sr, 2),
+                        "duration_s": round(result.duration_s, 2),
                     }
             except Exception as e:
                 yield {
@@ -398,21 +401,14 @@ def preview_voices(slug: str, req: PreviewVoicesRequest):
                         "duration_s": wav_duration_s(wav_path),
                     }
                 else:
+                    # Backend-agnostic generate() — Higgs vs OmniVoice
+                    # picked per-voice via state.get_tts_for_voice's
+                    # registry lookup (Phase 2 dispatch).
                     tts = get_tts_for_voice(voice)
-                    tts.load()
-                    sr = tts.sample_rate
                     t0 = time.time()
-                    audios = tts._model.generate(
-                        text=clean,
-                        language=language,
-                        ref_text=voice.transcript(),
-                        ref_audio=str(voice.wav_path),
-                        num_step=p.num_step,
-                        guidance_scale=p.guidance_scale,
-                        speed=p.speed,
-                    )
+                    result = tts.generate(clean, voice, p, language=language)
                     gen_s = time.time() - t0
-                    sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+                    sf.write(str(wav_path), result.audio, result.sample_rate, subtype="PCM_16")
                     gen_times[wav_path.name] = round(gen_s, 2)
                     gen_times_dirty = True
                     cell = {
@@ -421,7 +417,7 @@ def preview_voices(slug: str, req: PreviewVoicesRequest):
                         "audio_url": f"/api/projects/{slug}/preview-audio/{wav_path.name}",
                         "cached": False,
                         "gen_seconds": round(gen_s, 2),
-                        "duration_s": round(audios[0].shape[-1] / sr, 2),
+                        "duration_s": round(result.duration_s, 2),
                     }
             except Exception as e:
                 yield {
@@ -548,21 +544,19 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
                 "duration_s": wav_duration_s(wav_path)}
 
     tts = get_tts_for_voice(voice)
-    tts.load()
-    sr = tts.sample_rate
 
-    t0 = time.time()
-    audios = tts._model.generate(
-        text=clean,
-        language=language,
-        ref_text=voice.transcript(),
-        ref_audio=str(voice.wav_path),
-        num_step=req.num_step,
-        guidance_scale=req.guidance_scale,
-        speed=req.speed,
+    # High-level generate() so the call works for both backends. Higgs
+    # ignores num_step/guidance_scale/speed; OmniVoice consumes them.
+    from audiomat.project import RenderParams as _RP
+    custom_params = _RP(
+        num_step=int(req.num_step),
+        guidance_scale=float(req.guidance_scale),
+        speed=float(req.speed),
     )
+    t0 = time.time()
+    result = tts.generate(clean, voice, custom_params, language=language)
     gen_s = time.time() - t0
-    sf.write(str(wav_path), audios[0], sr, subtype="PCM_16")
+    sf.write(str(wav_path), result.audio, result.sample_rate, subtype="PCM_16")
     gen_times[wav_path.name] = round(gen_s, 2)
     try:
         gen_times_path.write_text(
@@ -572,7 +566,7 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
     except OSError:
         pass
     return {**base, "cached": False, "gen_seconds": round(gen_s, 2),
-            "duration_s": round(audios[0].shape[-1] / sr, 2)}
+            "duration_s": round(result.duration_s, 2)}
 
 
 @router.get("/{slug}/preview-audio/{filename}")

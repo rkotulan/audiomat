@@ -10,7 +10,7 @@ export function Layout() {
           <NavLink to="/" className="flex items-center gap-2 font-semibold">
             <Headphones className="h-5 w-5 text-primary" strokeWidth={1.75} />
             <span>audiomat</span>
-            <span className="text-xs text-muted-foreground font-normal">v0.4.1</span>
+            <span className="text-xs text-muted-foreground font-normal">v0.4.2</span>
           </NavLink>
           <nav className="flex items-center gap-1 ml-auto text-sm">
             <NavItem to="/projects" icon={<BookOpen className="h-4 w-4" />}>
