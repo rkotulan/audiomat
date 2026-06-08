@@ -90,33 +90,42 @@ CREATE INDEX IF NOT EXISTS idx_manifest_lookup
 """
 
 
-# Per-path connection cache. Tests create many isolated libraries via
-# the conftest fixture, each needing its own connection — keying by
-# resolved absolute path means we get one handle per library root
-# instead of one global handle that's stuck to whichever path won the
-# race at module import.
-_CONNECTIONS: dict[str, sqlite3.Connection] = {}
+# Per-(path, thread) connection cache. Each FastAPI threadpool worker
+# gets its own sqlite3 handle so concurrent requests don't race on a
+# shared Connection (the v0.3 single-handle setup with
+# check_same_thread=False crashed with "bad parameter or other API
+# misuse" under concurrent SSE-stream + audio-fetch load — sqlite3.Row
+# cursors aren't safe to share across threads). The lock only guards
+# the dict; once a connection is materialised it's used freely on its
+# owning thread.
+#
+# Path is part of the key so the pytest ``isolated_library`` fixture
+# (which monkey-patches AUDIOMAT_LIBRARY_ROOT and reloads state) still
+# gets a fresh connection per test even when the same threadpool
+# thread serves multiple tests.
+_CONNECTIONS: dict[tuple[str, int], sqlite3.Connection] = {}
 _LOCK = threading.Lock()
 
 
 def get_conn(db_path: Path | str | None = None) -> sqlite3.Connection:
-    """Return (or create) the connection for ``db_path``.
+    """Return (or create) the sqlite3 connection for ``db_path`` on the
+    calling thread.
 
     When ``db_path`` is None we resolve via :data:`audiomat.state.PATHS`
     — the normal production path. Tests can pass an explicit path to
     sidestep the global PATHS singleton entirely.
 
-    Each connection is opened with ``check_same_thread=False`` so the
-    render worker thread can share the handle with the FastAPI request
-    threads. SQLite serializes writes internally; WAL mode keeps reads
-    non-blocking. ``row_factory=sqlite3.Row`` gives us ``row["name"]``
-    dict-style access in the dataclass adapters.
+    Each connection is opened with ``check_same_thread=True`` (Python's
+    default) — we never share a handle across threads. WAL keeps cross-
+    thread reads non-blocking at the DB level; each thread just has its
+    own handle pointed at the same file. ``row_factory=sqlite3.Row``
+    gives us ``row["name"]`` dict-style access in the dataclass adapters.
     """
     if db_path is None:
         from audiomat.state import PATHS
         db_path = PATHS.library_root / "audiomat.db"
     db_path = Path(db_path).resolve()
-    key = str(db_path)
+    key = (str(db_path), threading.get_ident())
     with _LOCK:
         existing = _CONNECTIONS.get(key)
         if existing is not None:
@@ -124,7 +133,6 @@ def get_conn(db_path: Path | str | None = None) -> sqlite3.Connection:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(
             str(db_path),
-            check_same_thread=False,
             isolation_level=None,         # autocommit; we BEGIN explicitly when needed
         )
         conn.row_factory = sqlite3.Row
