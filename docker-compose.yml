@@ -1,25 +1,38 @@
-# Local development compose file.
+# Compose entry for running audiomat as a container.
 #
 # Usage:
-#   docker compose up --build
-#   open http://localhost:7860
+#   docker compose up -d                # pulls kotulan/audiomat:latest, mounts ./data
+#   docker compose up -d --build        # local build instead of pull
+#   docker compose logs -f              # tail logs
+#   docker compose down                 # stop + remove (data on the bind mount survives)
 #
-# The named volume `audiomat-data` persists voices/projects/cache across
-# container rebuilds — important so the OmniVoice 3 GB model checkpoint
-# isn't re-downloaded each time.
+# Configurable via .env (gitignored — see .env.example):
+#   AUDIOMAT_DATA      bind-mount source for the library root
+#                      (defaults to ./data, gitignored)
+#   AUDIOMAT_VERSION   image tag pulled from kotulan/audiomat
+#                      (defaults to latest)
+#   AUDIOMAT_PORT      host port mapped to the container's :7860
+#                      (defaults to 7860)
+#
+# Library layout — see CLAUDE.md "Filesystem layout". The OmniVoice
+# weights (~3 GB) and the SQLite DB live inside this dir, so pointing
+# AUDIOMAT_DATA at a fast local SSD path matters for first-render time
+# and DB write throughput.
 
 services:
   audiomat:
+    image: kotulan/audiomat:${AUDIOMAT_VERSION:-latest}
+    # Local-build path — `docker compose up --build` rebuilds from this
+    # tree instead of pulling. Useful when iterating on the Dockerfile.
     build:
       context: .
       dockerfile: Dockerfile
-    image: audiomat:dev
     container_name: audiomat
     restart: unless-stopped
     ports:
-      - "7860:7860"
+      - "${AUDIOMAT_PORT:-7860}:7860"
     volumes:
-      - audiomat-data:/data
+      - "${AUDIOMAT_DATA:-./data}:/data"
     environment:
       AUDIOMAT_LIBRARY_ROOT: /data
       HF_HOME: /data/cache/huggingface
@@ -30,7 +43,3 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
-volumes:
-  audiomat-data:
-    name: audiomat-data
