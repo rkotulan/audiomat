@@ -1,5 +1,14 @@
 """Library backup + restore — single-file ZIP, configurable scope.
 
+DB snapshotting note: SQLite ``PRAGMA wal_checkpoint`` was the obvious
+choice but breaks on Windows host → Linux container bind-mounts (file
+locking semantics differ; checkpoint races with the container's own
+open handle and reports ``disk I/O error``). We use the SQLite Backup
+API instead (``sqlite3.Connection.backup``), which produces a
+consistent snapshot copy without mutating the source — works across
+WAL state and survives any platform's lock quirks.
+
+
 Tier system:
 
 * **Essentials** (always included): audiomat.db, settings.json,
@@ -32,6 +41,8 @@ import datetime as dt
 import io
 import logging
 import shutil
+import sqlite3
+import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -92,11 +103,16 @@ class SizePreview:
 def _walk_essentials(library_root: Path) -> Iterator[Path]:
     """Yield absolute paths of files that always go into the backup.
 
-    audiomat.db gets a WAL checkpoint *before* this is called so the
-    file we copy is a self-contained snapshot — see
-    :func:`checkpoint_db`.
+    audiomat.db is intentionally **not** yielded by this walk — the
+    caller (:func:`export_zip`) writes a fresh DB snapshot under that
+    arcname via the SQLite Backup API. Yielding the live file would
+    risk racing with concurrent writes (and breaks on Windows
+    bind-mounts that can't take the WAL lock).
     """
     for name in _ROOT_FILES:
+        if name == "audiomat.db":
+            # Skip — handled by snapshot_db_into_zip in export_zip.
+            continue
         p = library_root / name
         if p.exists() and p.is_file():
             yield p
@@ -166,19 +182,41 @@ def _walk_finals(library_root: Path) -> Iterator[Path]:
             yield f
 
 
-# ---- DB checkpoint --------------------------------------------------------
+# ---- DB snapshot ----------------------------------------------------------
 
 
-def checkpoint_db(library_root: Path) -> None:
-    """``PRAGMA wal_checkpoint(TRUNCATE)`` so audiomat.db is a fully
-    self-contained file (no in-WAL writes left behind). After this
-    call the .db-wal / .db-shm sidecars can be ignored — included in
-    the backup or not, the .db alone restores correctly."""
-    db_path = library_root / "audiomat.db"
-    if not db_path.exists():
-        return
-    conn = db.get_conn(db_path)
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+def snapshot_db(library_root: Path, dest: Path) -> bool:
+    """Write a consistent snapshot of ``library_root/audiomat.db`` to
+    ``dest`` via the SQLite Backup API (Connection.backup).
+
+    Returns False when there's no DB to snapshot (fresh install), True
+    on success. The Backup API holds a read-only intent lock for the
+    duration of the copy, so concurrent readers stay unblocked and
+    writers serialize cleanly — works across WAL state and on
+    bind-mounted filesystems that fight us over the WAL lock.
+    """
+    src_path = library_root / "audiomat.db"
+    if not src_path.exists():
+        return False
+    src = sqlite3.connect(str(src_path))
+    try:
+        dst = sqlite3.connect(str(dest))
+        try:
+            with dst:
+                src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return True
+
+
+def estimate_db_bytes(library_root: Path) -> int:
+    """Size of audiomat.db on disk. Used by estimate_size — the snapshot
+    we'd produce is the same size as the source (Backup API copies
+    page-for-page)."""
+    src_path = library_root / "audiomat.db"
+    return src_path.stat().st_size if src_path.exists() else 0
 
 
 # ---- size estimate --------------------------------------------------------
@@ -191,6 +229,10 @@ def estimate_size(library_root: Path) -> SizePreview:
     library_root = Path(library_root)
     out = SizePreview()
     files = {"essentials": 0, "renders": 0, "finals": 0}
+    db_bytes = estimate_db_bytes(library_root)
+    if db_bytes > 0:
+        out.essentials_bytes += db_bytes
+        files["essentials"] += 1
     for p in _walk_essentials(library_root):
         out.essentials_bytes += p.stat().st_size
         files["essentials"] += 1
@@ -218,28 +260,46 @@ def export_zip(
     streaming endpoint can hand us its own writer to avoid buffering
     a multi-GB export in memory.
 
-    audiomat.db is checkpointed first so what lands in the ZIP is a
-    point-in-time snapshot, not a half-written WAL.
+    audiomat.db is snapshotted via the SQLite Backup API into a
+    tempfile and that tempfile is what lands in the ZIP. The live
+    audiomat.db is never read directly — avoids a class of locking
+    races on Windows host → Linux container bind-mounts.
     """
     library_root = Path(library_root)
-    checkpoint_db(library_root)
 
     buf = out if out is not None else io.BytesIO()
-    # ZIP_DEFLATED keeps WAVs / M4Bs compressed about as well as
-    # ZIP_STORED (audio doesn't compress — they're already PCM/AAC),
-    # but the small text files (.txt, .json) shrink ~3-5×.
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=4) as zf:
-        for path in _walk_essentials(library_root):
-            arcname = path.relative_to(library_root).as_posix()
-            zf.write(path, arcname=arcname)
-        if scope.include_renders:
-            for path in _walk_renders(library_root):
+    # Tempfile holds the DB snapshot; deleted in the finally so even a
+    # mid-zip crash doesn't leave a stray copy hanging around.
+    tmp_db: Path | None = None
+    try:
+        if (library_root / "audiomat.db").exists():
+            tmp_db = Path(tempfile.mkstemp(prefix="audiomat-backup-", suffix=".db")[1])
+            snapshot_db(library_root, tmp_db)
+
+        # ZIP_DEFLATED keeps WAVs / M4Bs compressed about as well as
+        # ZIP_STORED (audio doesn't compress — they're already PCM/AAC),
+        # but the small text files (.txt, .json) shrink ~3-5×.
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=4) as zf:
+            if tmp_db is not None:
+                zf.write(tmp_db, arcname="audiomat.db")
+            for path in _walk_essentials(library_root):
                 arcname = path.relative_to(library_root).as_posix()
                 zf.write(path, arcname=arcname)
-        if scope.include_finals:
-            for path in _walk_finals(library_root):
-                arcname = path.relative_to(library_root).as_posix()
-                zf.write(path, arcname=arcname)
+            if scope.include_renders:
+                for path in _walk_renders(library_root):
+                    arcname = path.relative_to(library_root).as_posix()
+                    zf.write(path, arcname=arcname)
+            if scope.include_finals:
+                for path in _walk_finals(library_root):
+                    arcname = path.relative_to(library_root).as_posix()
+                    zf.write(path, arcname=arcname)
+    finally:
+        if tmp_db is not None:
+            try:
+                tmp_db.unlink()
+            except OSError:
+                pass
+
     if isinstance(buf, io.BytesIO):
         buf.seek(0)
     return buf
@@ -320,7 +380,6 @@ def restore_zip(
         pre_restore_dir = library_root.parent / f"audiomat-pre-restore-{ts}.zip"
     if any(library_root.iterdir()) if library_root.exists() else False:
         try:
-            checkpoint_db(library_root)
             with pre_restore_dir.open("wb") as f:
                 export_zip(library_root, BackupScope(), out=f)
             report.pre_restore_snapshot = pre_restore_dir
