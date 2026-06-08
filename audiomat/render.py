@@ -157,9 +157,14 @@ class ProjectRenderer:
         self,
         project: Project,
         voice: Voice,
-        tts: OmniVoiceTTS,
+        tts: "OmniVoiceTTS",       # widened in practice — v0.4 added HiggsTTS
         blocks: list[Block],
     ):
+        # The type hint stays OmniVoiceTTS for back-compat with code that
+        # imports ProjectRenderer with a narrow annotation. At runtime
+        # either OmniVoiceTTS or HiggsTTS works because both expose the
+        # same generate(text, voice, params, language) → GenerationResult
+        # signature (see tests/test_render_higgs_dispatch.py).
         self.project = project
         self.voice = voice
         self.tts = tts
