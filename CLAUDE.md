@@ -1,7 +1,7 @@
 # audiomat — Czech-first audiobook TTS app
 
 Public app: turn EPUB/TXT + 5–10 s voice clip → M4B audiobook with cloned
-voice. GPU-only, OmniVoice fixed, FastAPI + React stack. Sister R&D /
+voice. GPU-only, OmniVoice default + Higgs v3 opt-in, FastAPI + React stack. Sister R&D /
 playground dir is `C:\Dev\audiomat-lab\` (not a git repo) — pipeline
 logic was developed there first and ported here. See "Sister project"
 at the bottom for current contents.
@@ -28,7 +28,7 @@ chapters, voice = Jitka Ježková).
 | Frontend | **Vite + React 19 + TypeScript 6** SPA in `frontend/` |
 | Styling | **Tailwind v4 + shadcn/ui** (new-york style, neutral base) |
 | Real-time progress | Server-Sent Events (`sse-starlette`) |
-| TTS engine | **OmniVoice fixed** (`k2-fsa/OmniVoice` 0.1.5, Apache-2.0) |
+| TTS engine | **OmniVoice default** (`k2-fsa/OmniVoice` 0.1.5, Apache-2.0); **Higgs Audio v3** opt-in (`multimodalart/higgs-audio-v3-tts-4b-transformers`, non-commercial) via model registry |
 | Inference device | GPU only (CUDA), no CPU mode |
 | Input formats | EPUB + TXT |
 | UI design tooling | [`ui-ux-pro-max-skill`](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (per-dev, gitignored) |

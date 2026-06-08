@@ -95,6 +95,7 @@ to `/data` in this image).
 | tag | description |
 |---|---|
 | `latest` | most recent release |
+| `0.4.0` | Higgs Audio v3 TTS backend (opt-in via model registry, non-commercial license flag), per-voice backend dispatch |
 | `0.3.0` | SQLite-backed state (voices/projects/manifests), optimistic-lock PATCH, full library backup & restore |
 | `0.2.0` | voice picker matrix, long-source clip extractor, clone validator |
 | `0.1.0` | pinned first public release |
