@@ -755,6 +755,7 @@ function ReviewStage({
         <ValidateClipSection
           audioPath={draft.audio_path}
           transcript={transcript}
+          ttsModel={ttsModel}
         />
 
         <div className="flex justify-end gap-2">
@@ -775,10 +776,11 @@ function ReviewStage({
 }
 
 function ValidateClipSection({
-  audioPath, transcript,
+  audioPath, transcript, ttsModel,
 }: {
   audioPath: string
   transcript: string
+  ttsModel: string
 }) {
   const [text, setText] = useState(FALLBACK_VALIDATION_TEXT)
   const [isDefault, setIsDefault] = useState(true)
@@ -812,6 +814,7 @@ function ValidateClipSection({
         audio_path: audioPath,
         transcript,
         sample_text: text,
+        tts_model_slug: ttsModel || null,
       })
       setResult(r)
       // Persist on Render click — saves what the user actually used,

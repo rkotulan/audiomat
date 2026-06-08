@@ -245,9 +245,12 @@ def preview_staged_voice(req: PreviewStagedVoiceRequest):
     listens before committing the voice to the library, catching cases
     where a clean-looking clip happens to clone badly.
 
-    Uses production defaults (num_step=48, guidance_scale=2.0, speed=1.0)
-    and the stock OmniVoice model — fine-tunes attached via voice
-    metadata only kick in after the voice is saved.
+    Uses production defaults (num_step=48, guidance_scale=2.0, speed=1.0
+    — the diffusion knobs are ignored by Higgs). When ``tts_model_slug``
+    is set in the request, the preview routes to that registered
+    backend (e.g. Higgs) so the user hears the actual model they're
+    about to bind to the voice. Without it, falls back to stock
+    OmniVoice.
 
     Output WAV is written next to the staged voice in the same
     ``audiomat_voice_*`` tempdir; served via the existing /draft-audio
@@ -273,22 +276,34 @@ def preview_staged_voice(req: PreviewStagedVoiceRequest):
     import time
     import soundfile as sf
     from audiomat.headers import prepare_for_tts
+    from audiomat.model_registry import DEFAULT_MODEL_SLUG, TTSModel
     from audiomat.num2text import normalize_lang
+    from audiomat.project import RenderParams
     from audiomat.state import get_tts
 
-    # Stock OmniVoice for the staged preview — voice's tts_model field
-    # is only meaningful after save (this is a brand-new voice).
-    tts = get_tts(target=None)
-    tts.load()
-    sr = tts.sample_rate
+    # Pick backend from the chosen TTS model. Missing slug or "default"
+    # → stock OmniVoice. Missing entry in the registry → 404 (don't
+    # silently fall back here — the user explicitly picked something
+    # and we'd be lying if we rendered with a different backend).
+    model_slug = (req.tts_model_slug or "").strip()
+    if not model_slug or model_slug == DEFAULT_MODEL_SLUG:
+        tts = get_tts(target=None)
+        cache_key_backend = "stock"
+    else:
+        model = TTSModel.find_by_slug(PATHS.models_root, model_slug)
+        if model is None:
+            raise HTTPException(404, f"TTS model not found in registry: {model_slug!r}")
+        target = model.from_pretrained_target
+        revision = model.hf_revision if model.source_type == "hf" else None
+        tts = get_tts(target=target, revision=revision, backend=model.backend)
+        cache_key_backend = model_slug
 
     language = normalize_lang(req.language or "cs")
     clean = prepare_for_tts(sample_text, lang=language)
 
-    # Cache by (transcript, sample_text, audio_path) so re-clicking
-    # Render with no changes is instant. audio_path includes the
-    # tempdir name so two separate uploads can't collide.
-    key_src = f"{src.resolve().as_posix()}|{transcript}|{clean}"
+    # Cache by (audio, transcript, sample_text, model) so re-clicking
+    # Render is instant but a model swap doesn't get a stale audio.
+    key_src = f"{src.resolve().as_posix()}|{transcript}|{clean}|{cache_key_backend}"
     key = hashlib.md5(key_src.encode("utf-8")).hexdigest()[:16]
     out_path = src.parent / f"preview_{key}.wav"
 
@@ -301,25 +316,37 @@ def preview_staged_voice(req: PreviewStagedVoiceRequest):
             gen_seconds=0.0,            # cache hit — no fresh wall-clock to report
         )
 
+    # Stub Voice — backend-agnostic. Both OmniVoiceTTS and HiggsTTS read
+    # the same fields (is_valid, wav_path, transcript()) and ignore the
+    # rest, so a tiny duck-typed object is enough to call tts.generate
+    # without persisting the voice first.
+    class _StagedVoice:
+        def __init__(self, wav, txt):
+            self.dir = wav.parent
+            self.name = "__staged__"
+            self.name_slug = "__staged__"
+            self.wav_path = wav
+            self._transcript = txt
+        @property
+        def is_valid(self) -> bool:
+            return True
+        def transcript(self) -> str:
+            return self._transcript
+
+    voice_stub = _StagedVoice(src, transcript)
+    params = RenderParams(num_step=48, guidance_scale=2.0, speed=1.0)
+
     try:
         t0 = time.time()
-        audios = tts._model.generate(
-            text=clean,
-            language=language,
-            ref_text=transcript,
-            ref_audio=str(src),
-            num_step=48,
-            guidance_scale=2.0,
-            speed=1.0,
-        )
+        result = tts.generate(clean, voice_stub, params, language=language)
         gen_s = time.time() - t0
-        sf.write(str(out_path), audios[0], sr, subtype="PCM_16")
+        sf.write(str(out_path), result.audio, result.sample_rate, subtype="PCM_16")
     except Exception as e:
         raise HTTPException(500, f"TTS render failed: {type(e).__name__}: {e}")
 
     return PreviewStagedVoiceOut(
         audio_path=str(out_path),
-        duration_s=round(audios[0].shape[-1] / sr, 2),
+        duration_s=round(result.duration_s, 2),
         gen_seconds=round(gen_s, 2),
     )
 

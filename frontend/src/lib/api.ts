@@ -128,6 +128,9 @@ export async function previewStagedVoice(args: {
   transcript: string
   sample_text: string
   language?: string
+  // v0.4: route through a registered TTS model (e.g. Higgs) instead of
+  // stock OmniVoice. Null / undefined → stock OmniVoice (default).
+  tts_model_slug?: string | null
 }): Promise<StagedVoicePreview> {
   return fetch(`${BASE}/voices/preview-staged`, {
     method: 'POST',
@@ -137,6 +140,7 @@ export async function previewStagedVoice(args: {
       transcript: args.transcript,
       sample_text: args.sample_text,
       language: args.language ?? 'cs',
+      tts_model_slug: args.tts_model_slug ?? null,
     }),
   }).then(ok<StagedVoicePreview>)
 }

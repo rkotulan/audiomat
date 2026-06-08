@@ -143,11 +143,18 @@ class PreviewStagedVoiceRequest(BaseModel):
 
     Uses the production OmniVoice params (num_step=48, gs=2.0, speed=1.0)
     — what the eventual project render will use by default — so what
-    the user hears here matches what they'll get."""
+    the user hears here matches what they'll get.
+
+    ``tts_model_slug`` (v0.4+) — when set to a registered model's slug,
+    the staged preview routes to that backend (OmniVoice fine-tune,
+    Higgs Audio v3, etc.) instead of stock OmniVoice. Lets the user
+    validate the actual model they're about to bind the voice to,
+    not just stock OmniVoice with the same ref clip."""
     audio_path: str                 # staged voice.wav inside tempdir
     transcript: str                 # matching ref text (probably user-edited)
     sample_text: str                # what to render
     language: str = "cs"
+    tts_model_slug: str | None = None
 
 
 class PreviewStagedVoiceOut(BaseModel):
