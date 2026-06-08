@@ -362,10 +362,28 @@ function VoiceCard({
                 <option value="">OmniVoice (stock)</option>
                 {models.map((m) => (
                   <option key={m.name_slug} value={m.name_slug}>
-                    {m.name} ({m.source_type === 'hf' ? 'HF' : 'local'})
+                    {m.name}
+                    {m.backend === 'higgs' ? ' · Higgs' : ''}
+                    {m.license === 'non_commercial' ? ' · non-commercial' : ''}
+                    {' '}({m.source_type === 'hf' ? 'HF' : 'local'})
                   </option>
                 ))}
               </select>
+              {(() => {
+                const selected = models.find(
+                  (m) => m.name_slug === (v.tts_model ?? ''),
+                )
+                if (!selected || selected.license !== 'non_commercial') return null
+                return (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1 pt-1">
+                    <span className="shrink-0">⚠</span>
+                    <span>
+                      <strong>{selected.name}</strong>'s weights ship under a
+                      non-commercial license. Audiomat code stays MIT.
+                    </span>
+                  </p>
+                )
+              })()}
             </div>
           </div>
         )}

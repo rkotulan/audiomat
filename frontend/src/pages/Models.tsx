@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
+  AlertTriangle,
   ArrowLeft,
   Cpu,
   Cloud,
@@ -11,6 +12,7 @@ import {
   Lock,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Trash2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -226,6 +228,8 @@ function ModelRow({
   onRedownload: () => void
 }) {
   const isHF = model.source_type === 'hf'
+  const isHiggs = model.backend === 'higgs'
+  const isNonCommercial = model.license === 'non_commercial'
   return (
     <div className="rounded-md border bg-card p-3 flex items-start justify-between gap-3">
       <div className="space-y-1 min-w-0">
@@ -242,6 +246,30 @@ function ModelRow({
               </>
             )}
           </Badge>
+          {isHiggs && (
+            <Badge variant="default" className="font-normal" title="Higgs Audio v3 backend">
+              Higgs
+            </Badge>
+          )}
+          {isNonCommercial ? (
+            <Badge
+              variant="outline"
+              className="font-normal border-amber-500/60 text-amber-700 dark:text-amber-300 bg-amber-500/10"
+              title="Model weights ship under a non-commercial license. Audiomat itself stays MIT."
+            >
+              <AlertTriangle className="h-3 w-3" />
+              non-commercial
+            </Badge>
+          ) : (
+            <Badge
+              variant="outline"
+              className="font-normal text-xs"
+              title="Permissive license (typically Apache-2.0 or MIT)"
+            >
+              <ShieldCheck className="h-3 w-3" />
+              permissive
+            </Badge>
+          )}
           <span className="text-xs text-muted-foreground">
             {formatBytes(model.size_bytes)}
           </span>
@@ -319,6 +347,8 @@ function AddLocalModelDialog({
   const [name, setName] = useState('')
   const [srcDir, setSrcDir] = useState('')
   const [notes, setNotes] = useState('')
+  const [backend, setBackend] = useState<'omnivoice' | 'higgs'>('omnivoice')
+  const [license, setLicense] = useState<'permissive' | 'non_commercial'>('permissive')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -331,10 +361,14 @@ function AddLocalModelDialog({
         name: name.trim(),
         src_dir: srcDir.trim(),
         notes: notes.trim(),
+        backend,
+        license,
       })
       setName('')
       setSrcDir('')
       setNotes('')
+      setBackend('omnivoice')
+      setLicense('permissive')
       onAdded()
     } catch (e) {
       setErr(String(e))
@@ -387,6 +421,12 @@ function AddLocalModelDialog({
             </p>
           </div>
 
+          <BackendLicensePicker
+            backend={backend} setBackend={setBackend}
+            license={license} setLicense={setLicense}
+            disabled={busy}
+          />
+
           <div className="space-y-2">
             <Label htmlFor="ml-notes">Notes (optional)</Label>
             <Textarea
@@ -416,6 +456,75 @@ function AddLocalModelDialog({
 }
 
 // ----------------------------------------------------------------------------
+// Shared backend + license picker used by both Add dialogs. Surfaces the
+// non-commercial obligation prominently when the user picks a license
+// flag that requires it.
+// ----------------------------------------------------------------------------
+
+function BackendLicensePicker({
+  backend, setBackend, license, setLicense, disabled,
+}: {
+  backend: 'omnivoice' | 'higgs'
+  setBackend: (v: 'omnivoice' | 'higgs') => void
+  license: 'permissive' | 'non_commercial'
+  setLicense: (v: 'permissive' | 'non_commercial') => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-2">
+        <Label htmlFor="ml-backend">Backend</Label>
+        <select
+          id="ml-backend"
+          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+          value={backend}
+          onChange={(e) => {
+            const next = e.target.value as 'omnivoice' | 'higgs'
+            setBackend(next)
+            // Convenience: Higgs ships under a non-commercial license, so
+            // auto-flip the license flag when the user picks Higgs. They
+            // can still override before submit.
+            if (next === 'higgs' && license === 'permissive') {
+              setLicense('non_commercial')
+            }
+          }}
+          disabled={disabled}
+        >
+          <option value="omnivoice">OmniVoice (Apache-2.0)</option>
+          <option value="higgs">Higgs Audio v3 (multimodalart port)</option>
+        </select>
+        <p className="text-xs text-muted-foreground">
+          Selects the TTS adapter the renderer uses at runtime. Higgs needs
+          ~8.6 GB VRAM (bf16).
+        </p>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="ml-license">License</Label>
+        <select
+          id="ml-license"
+          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+          value={license}
+          onChange={(e) =>
+            setLicense(e.target.value as 'permissive' | 'non_commercial')
+          }
+          disabled={disabled}
+        >
+          <option value="permissive">Permissive (Apache / MIT)</option>
+          <option value="non_commercial">Non-commercial use only</option>
+        </select>
+        {license === 'non_commercial' && (
+          <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1">
+            <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+            You agree these weights are used for non-commercial purposes
+            only. Audiomat code stays MIT.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------------------
 // Add-from-HF dialog
 // ----------------------------------------------------------------------------
 
@@ -434,6 +543,8 @@ function AddHFModelDialog({
   const [repoId, setRepoId] = useState('')
   const [revision, setRevision] = useState('')
   const [notes, setNotes] = useState('')
+  const [backend, setBackend] = useState<'omnivoice' | 'higgs'>('omnivoice')
+  const [license, setLicense] = useState<'permissive' | 'non_commercial'>('permissive')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [percent, setPercent] = useState<number | null>(null)
@@ -477,6 +588,8 @@ function AddHFModelDialog({
           repo_id: repoId.trim(),
           revision: revision.trim() || null,
           notes: notes.trim(),
+          backend,
+          license,
         },
         {
           onStarted: (total) => setTotalBytes(total),
@@ -492,6 +605,8 @@ function AddHFModelDialog({
       setRepoId('')
       setRevision('')
       setNotes('')
+      setBackend('omnivoice')
+      setLicense('permissive')
       setPercent(null)
       onAdded()
     } catch (e) {
@@ -609,6 +724,12 @@ function AddHFModelDialog({
               at download time so re-downloads stay reproducible.
             </p>
           </div>
+
+          <BackendLicensePicker
+            backend={backend} setBackend={setBackend}
+            license={license} setLicense={setLicense}
+            disabled={busy}
+          />
 
           <div className="space-y-2">
             <Label htmlFor="hf-notes">Notes (optional)</Label>

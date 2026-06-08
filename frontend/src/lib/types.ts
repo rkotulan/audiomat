@@ -16,6 +16,9 @@ export interface Voice {
   tts_model: string | null
 }
 
+export type TTSBackend = 'omnivoice' | 'higgs'
+export type TTSLicense = 'permissive' | 'non_commercial'
+
 export interface TTSModel {
   name: string
   name_slug: string
@@ -25,6 +28,12 @@ export interface TTSModel {
   size_bytes: number
   notes: string
   created: string
+  // v0.4 — which TTS adapter the renderer uses for this model
+  // ('omnivoice' default; 'higgs' for the multimodalart Higgs Audio v3
+  // port). License documents the weights' obligations for the UI;
+  // audiomat code stays MIT regardless.
+  backend: TTSBackend
+  license: TTSLicense
 }
 
 export interface HFRepoInfo {

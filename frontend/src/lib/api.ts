@@ -242,6 +242,8 @@ export const registerLocalModel = (body: {
   src_dir: string
   notes?: string
   overwrite?: boolean
+  backend?: 'omnivoice' | 'higgs'
+  license?: 'permissive' | 'non_commercial'
 }): Promise<TTSModel> =>
   fetch(`${BASE}/models`, {
     method: 'POST',
@@ -311,6 +313,8 @@ export async function downloadHFModel(
     token?: string | null
     notes?: string
     overwrite?: boolean
+    backend?: 'omnivoice' | 'higgs'
+    license?: 'permissive' | 'non_commercial'
   },
   events: ModelDownloadEvents = {},
 ): Promise<{ model_slug: string }> {
