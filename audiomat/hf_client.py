@@ -130,6 +130,8 @@ def download_to_registry(
     notes: str = "",
     overwrite: bool = False,
     progress_cb: Callable[[int, int], None] | None = None,
+    backend: str = "omnivoice",
+    license: str = "permissive",
 ) -> TTSModel:
     """Download an HF model snapshot into the local registry as the
     given ``name``.
@@ -233,12 +235,14 @@ def download_to_registry(
         size_bytes=size,
         notes=notes,
         created=_utcnow_iso(),
+        backend=backend,
+        license=license,
     )
     if not model.is_valid:
         shutil.rmtree(target, ignore_errors=True)
         raise ValueError(
             f"HF repo {repo_id} downloaded successfully but doesn't look "
-            f"like an OmniVoice checkpoint (missing config.json or weights)"
+            f"like a usable TTS checkpoint (missing config.json or weights)"
         )
     model.save()
     return model
@@ -271,6 +275,8 @@ def redownload(
         notes=existing.notes,
         overwrite=True,
         progress_cb=progress_cb,
+        backend=existing.backend,
+        license=existing.license,
     )
 
 
@@ -298,6 +304,8 @@ def stream_download_to_registry(
     token: str | None = None,
     notes: str = "",
     overwrite: bool = False,
+    backend: str = "omnivoice",
+    license: str = "permissive",
 ) -> Iterator[DownloadProgress]:
     """Same as :func:`download_to_registry` but yields progress events
     instead of taking a callback. The actual download runs in a worker
@@ -326,6 +334,7 @@ def stream_download_to_registry(
             result["model"] = download_to_registry(
                 models_root, name=name, repo_id=repo_id, revision=revision,
                 token=token, notes=notes, overwrite=overwrite, progress_cb=cb,
+                backend=backend, license=license,
             )
         except Exception as e:
             result["error"] = f"{type(e).__name__}: {e}"

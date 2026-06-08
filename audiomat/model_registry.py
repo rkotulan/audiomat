@@ -35,6 +35,8 @@ DEFAULT_MODEL_HF_ID = "k2-fsa/OmniVoice"
 
 
 SourceType = Literal["local", "hf"]
+Backend = Literal["omnivoice", "higgs"]
+LicenseFlag = Literal["permissive", "non_commercial"]
 
 
 @dataclass
@@ -50,6 +52,18 @@ class TTSModel:
     size_bytes: int = 0
     notes: str = ""
     created: str = ""
+    # v0.4: backend drives the TTS class dispatch in
+    # ``audiomat.state.get_tts``. "omnivoice" loads the OmniVoiceTTS
+    # wrapper around the omnivoice pip package; "higgs" loads the
+    # HiggsTTS wrapper around transformers + the multimodalart Higgs
+    # Audio v3 port. Both adapters expose the same generate() signature
+    # so the renderer doesn't need backend-specific branches.
+    backend: Backend = "omnivoice"
+    # User-facing license obligation surfaced in the UI (badge on the
+    # Models page, confirm dialog when assigning to a voice). Audiomat
+    # itself stays MIT regardless — this flag only documents the
+    # weights' license so the operator knows what they're agreeing to.
+    license: LicenseFlag = "permissive"
 
     @property
     def meta_path(self) -> Path:
@@ -89,6 +103,8 @@ class TTSModel:
             "size_bytes": int(self.size_bytes),
             "notes": self.notes,
             "created": self.created or _utcnow_iso(),
+            "backend": self.backend,
+            "license": self.license,
         }
         self.meta_path.write_text(
             json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
@@ -111,6 +127,11 @@ class TTSModel:
             size_bytes=int(meta.get("size_bytes", 0)),
             notes=meta.get("notes", ""),
             created=meta.get("created", ""),
+            # Defaults for v0.3-and-earlier meta.json files that lack
+            # these fields. Existing user registry entries keep working:
+            # they all targeted OmniVoice which is Apache-2.0.
+            backend=meta.get("backend", "omnivoice"),
+            license=meta.get("license", "permissive"),
         )
 
     @classmethod
@@ -145,13 +166,20 @@ class TTSModel:
         src_dir: Path,
         notes: str = "",
         overwrite: bool = False,
+        backend: Backend = "omnivoice",
+        license: LicenseFlag = "permissive",
     ) -> "TTSModel":
         """Copy a local checkpoint directory into the registry.
 
-        ``src_dir`` is expected to contain the files needed by
-        ``OmniVoice.from_pretrained`` (config.json + weight shards). The
-        files are **copied** (not symlinked) so deleting the source dir
-        afterwards doesn't break the registry entry."""
+        ``src_dir`` is expected to contain the files needed by the
+        chosen backend's ``from_pretrained`` (config.json + weight
+        shards for both omnivoice and Higgs ports). The files are
+        **copied** (not symlinked) so deleting the source dir
+        afterwards doesn't break the registry entry.
+
+        ``backend`` selects the TTS adapter the renderer will dispatch
+        to. ``license`` documents the weights' obligations for the UI;
+        audiomat code stays MIT regardless."""
         slug = slugify(name)
         if slug == DEFAULT_MODEL_SLUG:
             raise ValueError(
@@ -183,6 +211,8 @@ class TTSModel:
             size_bytes=size,
             notes=notes,
             created=_utcnow_iso(),
+            backend=backend,
+            license=license,
         )
         if not model.is_valid:
             # Roll back — the source dir wasn't a usable checkpoint.

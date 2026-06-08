@@ -273,6 +273,11 @@ class ModelOut(BaseModel):
     size_bytes: int
     notes: str
     created: str
+    # v0.4: backend drives TTS class dispatch (omnivoice vs higgs).
+    # license documents the weights' obligations for the UI; audiomat
+    # code stays MIT regardless.
+    backend: Literal["omnivoice", "higgs"] = "omnivoice"
+    license: Literal["permissive", "non_commercial"] = "permissive"
 
     @classmethod
     def from_model(cls, m: TTSModel) -> "ModelOut":
@@ -281,29 +286,42 @@ class ModelOut(BaseModel):
             source_type=m.source_type, source_ref=m.source_ref,
             hf_revision=m.hf_revision, size_bytes=m.size_bytes,
             notes=m.notes, created=m.created,
+            backend=m.backend, license=m.license,
         )
 
 
 class RegisterLocalModelRequest(BaseModel):
     """POST /api/models body. ``src_dir`` must be a path that the
     container can read (typically a bind-mounted host directory under
-    /data/uploads/ or similar)."""
+    /data/uploads/ or similar). ``backend`` selects which TTS adapter
+    will load the model at render time (omnivoice = default, higgs =
+    HiggsTTS via the multimodalart trust_remote_code port). ``license``
+    documents the weights' obligations for the UI."""
     name: str
     src_dir: str
     notes: str = ""
     overwrite: bool = False
+    backend: Literal["omnivoice", "higgs"] = "omnivoice"
+    license: Literal["permissive", "non_commercial"] = "permissive"
 
 
 class RegisterHFModelRequest(BaseModel):
     """POST /api/models/from-hf body. ``token`` overrides whatever is
     stored in secrets.json for this one call — useful for testing a
-    token before persisting it."""
+    token before persisting it.
+
+    See ``RegisterLocalModelRequest`` for ``backend`` / ``license``
+    semantics — for Higgs the typical request is
+    ``backend="higgs"``, ``license="non_commercial"``,
+    ``repo_id="multimodalart/higgs-audio-v3-tts-4b-transformers"``."""
     name: str
     repo_id: str
     revision: str | None = None
     token: str | None = None
     notes: str = ""
     overwrite: bool = False
+    backend: Literal["omnivoice", "higgs"] = "omnivoice"
+    license: Literal["permissive", "non_commercial"] = "permissive"
 
 
 # ----------------------------------------------------------------------------

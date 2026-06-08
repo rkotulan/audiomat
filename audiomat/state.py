@@ -94,26 +94,36 @@ def _evict_lru_locked() -> None:
     del _TTS_INSTANCES[lru_key]
 
 
-def get_tts(target: str | None = None, revision: str | None = None) -> OmniVoiceTTS:
+def get_tts(
+    target: str | None = None,
+    revision: str | None = None,
+    backend: str = "omnivoice",
+) -> "OmniVoiceTTS | HiggsTTS":
     """Return (or create) the TTS instance for ``target``.
 
     * ``target=None`` → stock OmniVoice (DEFAULT_MODEL_ID + DEFAULT_REVISION
       from tts.py). Backwards-compatible with existing single-singleton
-      callers.
+      callers. ``backend`` is forced to "omnivoice" in this branch.
     * ``target=<hf_id>`` → that HF model. ``revision`` pinned if given.
     * ``target=<local_path>`` → that on-disk checkpoint. ``revision`` is
       meaningless for local snapshots (always None passed to
       from_pretrained).
+    * ``backend="higgs"`` → instantiate :class:`HiggsTTS` instead of the
+      default :class:`OmniVoiceTTS`. Both expose the same generate()
+      interface so the renderer doesn't branch on type.
 
     Lazy: instantiation is cheap (no model load yet); the actual weight
     load fires on first ``generate()`` call inside the instance.
     """
-    # Resolve None → stock default with its pinned revision.
+    # Resolve None → stock default with its pinned revision. Stock is
+    # always the OmniVoice backend (Apache-2.0); a caller can't pick
+    # higgs without first registering a model in the registry.
     if target is None:
         from audiomat.tts import DEFAULT_MODEL_ID, DEFAULT_REVISION
         target = DEFAULT_MODEL_ID
         if revision is None:
             revision = DEFAULT_REVISION
+        backend = "omnivoice"
 
     key = _normalize_target(target)
     with _TTS_LOCK:
@@ -123,7 +133,11 @@ def get_tts(target: str | None = None, revision: str | None = None) -> OmniVoice
         # New target → evict LRU if at capacity, then instantiate.
         while len(_TTS_INSTANCES) >= MAX_LOADED_MODELS:
             _evict_lru_locked()
-        inst = OmniVoiceTTS(model_id=target, model_revision=revision)
+        if backend == "higgs":
+            from audiomat.tts_higgs import HiggsTTS
+            inst = HiggsTTS(model_id=target, model_revision=revision)
+        else:
+            inst = OmniVoiceTTS(model_id=target, model_revision=revision)
         _TTS_INSTANCES[key] = inst
         return inst
 
@@ -160,28 +174,43 @@ def peek_all_tts() -> list[OmniVoiceTTS]:
     return list(_TTS_INSTANCES.values())
 
 
-def get_tts_for_voice(voice) -> OmniVoiceTTS:  # type: ignore[no-untyped-def]
+def get_tts_for_voice(voice) -> "OmniVoiceTTS | HiggsTTS":  # type: ignore[no-untyped-def]
     """Resolve a voice's ``tts_model`` field through the model registry
     and return the matching TTS instance. Fall back to stock OmniVoice
     if the slug is None / empty / "default" — or if the registered slug
     has been deleted since the voice was created (graceful degradation:
     user loses fine-tune-specific quality but renders still work).
+
+    v0.4: looks up the registered ``TTSModel`` to discover the backend
+    (omnivoice vs higgs), so a voice pointing at a Higgs registry entry
+    instantiates :class:`HiggsTTS` instead of :class:`OmniVoiceTTS`.
     """
-    from audiomat.model_registry import resolve_model_target
-    tts_model = getattr(voice, "tts_model", None)
-    try:
-        target, revision = resolve_model_target(PATHS.models_root, tts_model)
-    except KeyError:
+    from audiomat.model_registry import (
+        DEFAULT_MODEL_SLUG,
+        TTSModel,
+    )
+    tts_model_slug = getattr(voice, "tts_model", None)
+    if not tts_model_slug or tts_model_slug == DEFAULT_MODEL_SLUG:
+        return get_tts(target=None)
+
+    model = TTSModel.find_by_slug(PATHS.models_root, tts_model_slug)
+    if model is None:
         # Registered model went missing — log + fall back to stock so
         # the user isn't stuck staring at an error on a render they
         # didn't expect to break.
         import logging
         logging.getLogger("audiomat.state").warning(
             "voice %r references missing tts_model %r — falling back to stock",
-            getattr(voice, "name_slug", "?"), tts_model,
+            getattr(voice, "name_slug", "?"), tts_model_slug,
         )
-        target, revision = resolve_model_target(PATHS.models_root, None)
-    return get_tts(target=target, revision=revision)
+        return get_tts(target=None)
+
+    target = model.from_pretrained_target
+    # ``revision`` only applies to HF-sourced models; local snapshots
+    # have nothing to pin against. The TTS backends' from_pretrained
+    # paths accept ``None`` and just follow the local dir.
+    revision = model.hf_revision if model.source_type == "hf" else None
+    return get_tts(target=target, revision=revision, backend=model.backend)
 
 
 def clear_tts(target: str | None = None) -> None:

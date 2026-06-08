@@ -88,6 +88,8 @@ def register_local_model(req: RegisterLocalModelRequest):
             src_dir=src,
             notes=req.notes,
             overwrite=req.overwrite,
+            backend=req.backend,
+            license=req.license,
         )
     except FileExistsError as e:
         raise HTTPException(409, str(e))
@@ -147,6 +149,8 @@ def register_hf_model(req: RegisterHFModelRequest):
         token=token,
         notes=req.notes,
         overwrite=req.overwrite,
+        backend=req.backend,
+        license=req.license,
     )
     return _sse_download(gen)
 
