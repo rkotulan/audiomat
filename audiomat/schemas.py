@@ -285,15 +285,63 @@ class ModelOut(BaseModel):
     # code stays MIT regardless.
     backend: Literal["omnivoice", "higgs"] = "omnivoice"
     license: Literal["permissive", "non_commercial"] = "permissive"
+    # v0.5: engine self-description embedded inline so the UI can drive
+    # sliders, badges, license warnings, and feature gates from one
+    # payload instead of branching on ``backend``. Shape mirrors
+    # :class:`audiomat.tts_capabilities.TTSCapabilities` via asdict;
+    # see the TypeScript ``TTSCapabilities`` type in frontend/lib/types.
+    capabilities: dict = {}
 
     @classmethod
     def from_model(cls, m: TTSModel) -> "ModelOut":
+        from audiomat.tts_capabilities import (
+            HIGGS_CAPABILITIES,
+            OMNIVOICE_CAPABILITIES,
+            caps_to_dict,
+        )
+        caps = HIGGS_CAPABILITIES if m.backend == "higgs" else OMNIVOICE_CAPABILITIES
         return cls(
             name=m.name, name_slug=m.name_slug,
             source_type=m.source_type, source_ref=m.source_ref,
             hf_revision=m.hf_revision, size_bytes=m.size_bytes,
             notes=m.notes, created=m.created,
             backend=m.backend, license=m.license,
+            capabilities=caps_to_dict(caps),
+        )
+
+    @classmethod
+    def from_stock_omnivoice(cls) -> "ModelOut":
+        """Synthetic listing entry for the stock ``k2-fsa/OmniVoice`` —
+        not a real registry row (the slug ``"default"`` is reserved
+        precisely to prevent that) but exposed in ``/api/models`` so the
+        UI can offer it uniformly alongside user-added entries. The
+        Models page renders it as a read-only card; the Engine dropdown
+        on Project Settings can point projects at it just like any other
+        registered model."""
+        from audiomat.model_registry import (
+            DEFAULT_MODEL_HF_ID,
+            DEFAULT_MODEL_SLUG,
+        )
+        from audiomat.tts import DEFAULT_REVISION as OMNIVOICE_DEFAULT_REV
+        from audiomat.tts_capabilities import (
+            OMNIVOICE_CAPABILITIES,
+            caps_to_dict,
+        )
+        return cls(
+            name="OmniVoice (stock)",
+            name_slug=DEFAULT_MODEL_SLUG,
+            source_type="hf",
+            source_ref=DEFAULT_MODEL_HF_ID,
+            hf_revision=OMNIVOICE_DEFAULT_REV,
+            size_bytes=0,                   # lives in HF cache, not registry
+            notes=(
+                "Apache-2.0. Stock voice-cloning model bundled with audiomat. "
+                "Loaded from Hugging Face on first use; no registry entry."
+            ),
+            created="",
+            backend="omnivoice",
+            license="permissive",
+            capabilities=caps_to_dict(OMNIVOICE_CAPABILITIES),
         )
 
 

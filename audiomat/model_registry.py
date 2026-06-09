@@ -255,6 +255,54 @@ def resolve_model_target(
     return model.from_pretrained_target, None
 
 
+def resolve_backend(models_root: Path, tts_model: str | None) -> Backend:
+    """Resolve a model slug to its backend identifier.
+
+    * ``None`` / empty / ``"default"`` → ``"omnivoice"`` (stock OmniVoice
+      is Apache-2.0 and is the only valid stock backend; we never have a
+      stock Higgs because Higgs is opt-in by license).
+    * Registered slug → that entry's ``backend`` field.
+    * Unknown slug → ``"omnivoice"`` (graceful fallback matching
+      ``state.get_tts_for_voice``'s "missing registry entry" path; a
+      warning is logged there, not here, since this resolver is also
+      called from sync code paths where logging would be noise).
+    """
+    if not tts_model or tts_model == DEFAULT_MODEL_SLUG:
+        return "omnivoice"
+    model = TTSModel.find_by_slug(models_root, tts_model)
+    if model is None:
+        return "omnivoice"
+    return model.backend
+
+
+def caps_for_model_slug(
+    models_root: Path,
+    tts_model: str | None,
+):  # -> TTSCapabilities (avoid import-time dep)
+    """Return the :class:`TTSCapabilities` descriptor that drives UI +
+    render-path validation for a given model slug. Same fallback rules
+    as :func:`resolve_backend` — unknown slug → stock OmniVoice caps.
+
+    Used by:
+    * router-level validation of ``project.params`` against the active
+      engine's :meth:`TTSCapabilities.validate_params`,
+    * frontend (via ``ModelOut.capabilities``) for slider / badge /
+      matrix rendering,
+    * future cast-assignment UI (gated on
+      ``supports_multi_speaker``).
+    """
+    # Local import — model_registry is imported by audiomat.state during
+    # FastAPI app boot, while tts_capabilities is leaf-level. Keeping
+    # this import inside the function avoids a top-of-file cycle if
+    # tts_capabilities ever needs anything from here.
+    from audiomat.tts_capabilities import (
+        HIGGS_CAPABILITIES,
+        OMNIVOICE_CAPABILITIES,
+    )
+    backend = resolve_backend(models_root, tts_model)
+    return HIGGS_CAPABILITIES if backend == "higgs" else OMNIVOICE_CAPABILITIES
+
+
 if __name__ == "__main__":
     # Smoke test: round-trip a synthetic checkpoint through the registry.
     # `python -m audiomat.model_registry`

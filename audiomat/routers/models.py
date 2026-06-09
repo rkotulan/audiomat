@@ -19,7 +19,7 @@ from audiomat.hf_client import (
     redownload as hf_redownload,
     stream_download_to_registry,
 )
-from audiomat.model_registry import TTSModel
+from audiomat.model_registry import DEFAULT_MODEL_SLUG, TTSModel
 from audiomat.schemas import (
     ModelOut,
     RegisterHFModelRequest,
@@ -37,9 +37,19 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 
 @router.get("", response_model=list[ModelOut])
 def list_models():
-    """Enumerate registered TTS models. Skips corrupt entries silently
-    (same shape as /voices)."""
-    return [ModelOut.from_model(m) for m in TTSModel.list_all(PATHS.models_root)]
+    """Enumerate TTS models the UI can offer.
+
+    Prepends a synthetic "OmniVoice (stock)" entry — the implicit
+    ``k2-fsa/OmniVoice`` baked into ``audiomat.tts`` — so the frontend's
+    Engine dropdown can list it uniformly alongside user-registered
+    fine-tunes and HF snapshots. The stock entry is read-only: register/
+    delete/redownload endpoints reject its reserved slug.
+
+    Skips corrupt registry entries silently (same shape as /voices).
+    """
+    out: list[ModelOut] = [ModelOut.from_stock_omnivoice()]
+    out.extend(ModelOut.from_model(m) for m in TTSModel.list_all(PATHS.models_root))
+    return out
 
 
 @router.get("/hf/my-repos", response_model=list[HFRepoInfo])
@@ -61,6 +71,10 @@ def list_my_hf_repos():
 
 @router.get("/{slug}", response_model=ModelOut)
 def get_model(slug: str):
+    """Detail view of one model. ``slug=="default"`` returns the
+    synthetic stock OmniVoice card; other slugs hit the registry."""
+    if slug == DEFAULT_MODEL_SLUG:
+        return ModelOut.from_stock_omnivoice()
     target = PATHS.model_dir(slug)
     if not (target / "meta.json").exists():
         raise HTTPException(404, f"model not found: {slug}")

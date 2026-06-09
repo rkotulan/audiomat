@@ -322,6 +322,23 @@ HIGGS_CAPABILITIES = TTSCapabilities(
 )
 
 
+def caps_to_dict(caps: TTSCapabilities) -> dict:
+    """JSON-friendly serialization of :class:`TTSCapabilities`.
+
+    ``dataclasses.asdict`` keeps tuples as tuples, which serialize to
+    JSON arrays on the wire but compare ``() != []`` Python-side. Tests
+    and any other Python consumer (caching layer, lab scripts) want a
+    consistent shape pre- and post-JSON — this helper coerces tuples to
+    lists at the boundary so callers see ``params: list[dict]``
+    uniformly.
+    """
+    import dataclasses as _dc
+    d = _dc.asdict(caps)
+    d["params"] = list(d["params"])
+    d["preset_variants"] = list(d["preset_variants"])
+    return d
+
+
 if __name__ == "__main__":
     # Smoke — `python -m audiomat.tts_capabilities`
     import dataclasses as _dc
