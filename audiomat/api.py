@@ -68,6 +68,22 @@ async def lifespan(_app: FastAPI):
             "v0.2 → v0.3 migration failed (server starting anyway): %s", e,
         )
 
+    try:
+        from audiomat.migrations.v0_5_project_tts_model import (
+            migrate_v0_4_to_v0_5,
+        )
+        report_v05 = migrate_v0_4_to_v0_5(PATHS.library_root)
+        if not report_v05.empty:
+            import logging as _log
+            _log.getLogger("audiomat").info(
+                "v0.4 → v0.5 migration: %s", report_v05,
+            )
+    except Exception as e:  # noqa: BLE001
+        import logging as _log
+        _log.getLogger("audiomat").exception(
+            "v0.4 → v0.5 migration failed (server starting anyway): %s", e,
+        )
+
     idle_task = asyncio.create_task(idle_unload_loop(), name="audiomat-idle-unload")
     try:
         yield

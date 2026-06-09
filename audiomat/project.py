@@ -119,6 +119,12 @@ class Project:
     created: str = ""
     last_run: str = ""
     version: int = 1                   # optimistic-lock counter (DB-side)
+    # v0.5: TTS model slug (registered in :mod:`audiomat.model_registry`)
+    # used by the renderer + preview matrix. ``None`` / ``""`` /
+    # ``"default"`` → stock ``k2-fsa/OmniVoice``. v0.4 inherited the
+    # model from the bound voice; v0.5 promotes it to a project-level
+    # choice so swapping voices doesn't accidentally swap engines.
+    tts_model: str | None = None
 
     # ---- Path accessors (computed from PATHS.projects_root + slug) ----
 
@@ -157,6 +163,16 @@ class Project:
         valid_param_keys = set(RenderParams.__dataclass_fields__)
         params = RenderParams(**{k: v for k, v in params_dict.items()
                                   if k in valid_param_keys})
+        # ``tts_model`` was added in v0.5; older DB rows might still be
+        # served by a pre-migration process during the brief schema-bump
+        # window. The migration is wired into the FastAPI lifespan so
+        # in practice ``row["tts_model"]`` always exists by the time
+        # any HTTP request lands — but guard anyway with sqlite3.Row's
+        # KeyError-on-missing-column path.
+        try:
+            tts_model_val = row["tts_model"]
+        except (IndexError, KeyError):
+            tts_model_val = None
         return cls(
             name=row["name"],
             name_slug=row["name_slug"],
@@ -180,6 +196,7 @@ class Project:
             created=row["created"] or "",
             last_run=row["last_run"] or "",
             version=int(row["version"]),
+            tts_model=tts_model_val,
         )
 
     def _to_params(self) -> tuple:
@@ -196,6 +213,7 @@ class Project:
             self.created or _utcnow_iso(),
             self.last_run,
             json.dumps(asdict(self.params), ensure_ascii=False),
+            self.tts_model,
         )
 
     # ---- IO ----
@@ -217,8 +235,9 @@ class Project:
                 "(name_slug, name, book_filename, book_title, book_author, "
                 " book_language, book_blocks_total, voice_ref, voice_ref_slug, "
                 " status_phase, status_chapters_done, status_chapters_total, "
-                " status_last_completed, created, last_run, params_json) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " status_last_completed, created, last_run, params_json, "
+                " tts_model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(name_slug) DO UPDATE SET "
                 "  name=excluded.name, "
                 "  book_filename=excluded.book_filename, "
@@ -234,6 +253,7 @@ class Project:
                 "  status_last_completed=excluded.status_last_completed, "
                 "  last_run=excluded.last_run, "
                 "  params_json=excluded.params_json, "
+                "  tts_model=excluded.tts_model, "
                 "  version=projects.version+1",
                 self._to_params(),
             )
@@ -261,7 +281,7 @@ class Project:
                 "  voice_ref=?, voice_ref_slug=?, "
                 "  status_phase=?, status_chapters_done=?, "
                 "  status_chapters_total=?, status_last_completed=?, "
-                "  last_run=?, params_json=?, "
+                "  last_run=?, params_json=?, tts_model=?, "
                 "  version=version+1 "
                 "WHERE name_slug=? AND version=?",
                 (
@@ -274,6 +294,7 @@ class Project:
                     int(self.status.chapters_total),
                     self.status.last_completed,
                     self.last_run, json.dumps(asdict(self.params), ensure_ascii=False),
+                    self.tts_model,
                     self.name_slug, expected_version,
                 ),
             )
@@ -410,6 +431,7 @@ class Project:
         params: RenderParams | None = None,
         book_meta: dict | None = None,
         overwrite: bool = False,
+        tts_model: str | None = None,
     ) -> "Project":
         """Create a new project: copies the book file into the project
         directory and INSERTs a row. Slug-collision-safe — rejects an
@@ -445,6 +467,7 @@ class Project:
             created=_utcnow_iso(),
             last_run="",
             version=1,
+            tts_model=tts_model,
         )
         proj.save()
         return proj

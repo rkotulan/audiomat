@@ -185,6 +185,10 @@ class ProjectOut(BaseModel):
     # on PATCH so the backend can detect "another tab edited this
     # since you loaded it" via Project.save_with_version.
     version: int
+    # v0.5: TTS model slug. ``None`` / ``"default"`` → stock OmniVoice.
+    # Drives engine dispatch at render time + UI capability lookup
+    # (sliders, badges, license warnings). Promoted from voice in v0.4.
+    tts_model: str | None = None
 
     @classmethod
     def from_project(cls, p: Project) -> "ProjectOut":
@@ -197,6 +201,7 @@ class ProjectOut(BaseModel):
             created=p.created, last_run=p.last_run,
             has_final_m4b=p.final_path.exists(),
             version=p.version,
+            tts_model=p.tts_model,
         )
 
 

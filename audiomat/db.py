@@ -64,7 +64,13 @@ CREATE TABLE IF NOT EXISTS projects (
   created                TEXT NOT NULL,
   last_run               TEXT NOT NULL DEFAULT '',
   params_json            TEXT NOT NULL,
-  version                INTEGER NOT NULL DEFAULT 1
+  version                INTEGER NOT NULL DEFAULT 1,
+  -- v0.5: TTS model slug (NULL / '' / 'default' → stock OmniVoice).
+  -- Replaces the v0.4 indirection through voice.tts_model — model is
+  -- now a per-project choice, not a per-voice one. Voices still carry
+  -- a tts_model field but its role is "preview / clone-validation only"
+  -- as far as the renderer is concerned.
+  tts_model              TEXT
 );
 
 CREATE TABLE IF NOT EXISTS project_blocks_skipped (
