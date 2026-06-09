@@ -19,6 +19,55 @@ export interface Voice {
 export type TTSBackend = 'omnivoice' | 'higgs'
 export type TTSLicense = 'permissive' | 'non_commercial'
 
+// ---- v0.5 capabilities descriptor ----
+//
+// Mirrors `audiomat.tts_capabilities.TTSCapabilities` serialized via
+// `caps_to_dict()`. Each registered TTS model carries its descriptor
+// inline on `/api/models`; the UI uses it to drive sliders, badges,
+// matrix suppression, and license warnings without ever branching on
+// `backend === 'higgs'` literals.
+
+export interface ParamSpec {
+  name: string                  // internal key in project.params dict
+  label: string                 // slider label
+  hint: string                  // helper text under the slider
+  kind: 'int' | 'float'
+  min: number
+  max: number
+  step: number
+  default: number
+  // Display formatting — render as `v.toFixed(decimals) + suffix`.
+  decimals: number
+  suffix: string
+}
+
+export interface PresetVariant {
+  key: string                   // stable id ("fast" | "balanced" | …)
+  label: string                 // UI label ("Fast" | "Balanced" | …)
+  // Param values applied on top of the project's current params. Cells
+  // whose key isn't present in this dict fall through to the project
+  // default.
+  params: Record<string, number>
+}
+
+export interface TTSCapabilities {
+  display_name: string
+  short_label: string
+  license_kind: TTSLicense
+  license_name: string
+  params: ParamSpec[]
+  preset_variants: PresetVariant[]
+  ref_min_seconds: number
+  ref_max_seconds: number
+  ref_sample_rate: number
+  output_sample_rate: number
+  supports_multi_speaker: boolean
+  supports_non_verbal_tags: boolean
+  supports_emotion_descriptor: boolean
+  typical_rtf: number
+  typical_vram_gb: number
+}
+
 export interface TTSModel {
   name: string
   name_slug: string
@@ -34,6 +83,10 @@ export interface TTSModel {
   // audiomat code stays MIT regardless.
   backend: TTSBackend
   license: TTSLicense
+  // v0.5 — self-describing capabilities. /api/models also prepends a
+  // synthetic "OmniVoice (stock)" entry under the reserved slug
+  // `default` so this is always present (no special-case lookup).
+  capabilities: TTSCapabilities
 }
 
 export interface HFRepoInfo {
@@ -109,6 +162,10 @@ export interface Project {
   // server can detect "another tab edited this since you loaded it"
   // and respond 409 instead of silently overwriting.
   version: number
+  // v0.5 — TTS model slug. null / "default" → stock OmniVoice. Drives
+  // engine dispatch at render time + UI capability lookup (sliders,
+  // badges, license warnings). Promoted from voice in v0.4.
+  tts_model: string | null
 }
 
 export type ProgressEventKind =

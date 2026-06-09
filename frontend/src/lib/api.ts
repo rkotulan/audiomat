@@ -620,6 +620,19 @@ export const updateProjectVoice = (
   `${BASE}/projects/${slug}/voice`, { voice_slug }, expectedVersion,
 )
 
+/** v0.5 — set the project's TTS engine. ``null`` / ``""`` / ``"default"``
+ *  reset to stock OmniVoice; the backend normalises to ``null`` so the
+ *  cache signature and DB row agree on one canonical form. Returns the
+ *  updated project (with new `version`) so the caller can keep its
+ *  optimistic-lock counter in sync without an extra GET. */
+export const updateProjectTtsModel = (
+  slug: string,
+  tts_model: string | null,
+  expectedVersion: number,
+) => patchWithVersion<Project>(
+  `${BASE}/projects/${slug}/tts-model`, { tts_model }, expectedVersion,
+)
+
 export const previewCustom = (
   slug: string,
   params: {
