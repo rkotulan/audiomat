@@ -64,6 +64,7 @@ import {
   updateProjectVoice,
 } from '@/lib/api'
 import { LANGUAGE_OPTIONS, isValidLanguageCode } from '@/lib/languages'
+import { capsForProject, formatParam } from '@/lib/caps'
 import type {
   Chapter,
   ChaptersResponse,
@@ -72,6 +73,7 @@ import type {
   PreviewVoicesMatrix,
   Project,
   ProgressEvent,
+  TTSCapabilities,
   TTSModel,
   Voice,
   VoicePreviewCell,
@@ -100,6 +102,21 @@ export function ProjectDetail() {
   const [editingStem, setEditingStem] = useState<string | null>(null)
   const unsubRef = useRef<(() => void) | null>(null)
   const { confirm, dialog: confirmDialog } = useConfirm()
+  // v0.5: TTS model registry — drives the Progress badges, render
+  // confirmation copy, and the param matrix suppression in PreviewTab.
+  // Lifted from PreviewTab so we don't refetch in multiple places.
+  // `models[]` is small (≤ ~10 entries) and stable across project edits;
+  // we refresh once on mount.
+  const [models, setModels] = useState<TTSModel[]>([])
+  useEffect(() => {
+    listModels()
+      .then(setModels)
+      .catch(() => setModels([]))
+  }, [])
+  const projectCaps: TTSCapabilities | null = useMemo(() => {
+    if (!project || models.length === 0) return null
+    return capsForProject(project, models)
+  }, [project, models])
 
   // Render-time ETA tracking. renderStart is the wall-clock ms at job
   // start; `now` ticks every second while busy so ETA refreshes live.
@@ -525,23 +542,37 @@ export function ProjectDetail() {
                 )}
               </div>
 
+              {/* v0.5: badges loop over the active engine's declared
+                  param specs. Engines with no params (Higgs) just show
+                  the voice + engine badge — no stale OmniVoice knobs. */}
               <div className="flex flex-wrap gap-1.5">
                 <Badge variant="secondary" className="font-normal">
                   <span className="text-muted-foreground mr-1">voice</span>
                   {project.voice_ref}
                 </Badge>
-                <Badge variant="secondary" className="font-normal font-mono">
-                  <span className="text-muted-foreground mr-1 font-sans">num_step</span>
-                  {project.params.num_step}
-                </Badge>
-                <Badge variant="secondary" className="font-normal font-mono">
-                  <span className="text-muted-foreground mr-1 font-sans">guidance</span>
-                  {project.params.guidance_scale}
-                </Badge>
-                <Badge variant="secondary" className="font-normal font-mono">
-                  <span className="text-muted-foreground mr-1 font-sans">speed</span>
-                  {project.params.speed}×
-                </Badge>
+                {projectCaps && (
+                  <Badge variant="secondary" className="font-normal">
+                    <span className="text-muted-foreground mr-1">engine</span>
+                    {projectCaps.short_label}
+                  </Badge>
+                )}
+                {projectCaps?.params.map((spec) => {
+                  const value =
+                    (project.params as unknown as Record<string, number>)[spec.name]
+                  if (value == null) return null
+                  return (
+                    <Badge
+                      key={spec.name}
+                      variant="secondary"
+                      className="font-normal font-mono"
+                    >
+                      <span className="text-muted-foreground mr-1 font-sans">
+                        {spec.label}
+                      </span>
+                      {formatParam(spec, value)}
+                    </Badge>
+                  )
+                })}
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -1267,6 +1298,14 @@ function VoiceTab({
     return m ? m.license : null
   }
 
+  // v0.5: project's active engine caps drive the data-driven render
+  // confirmation text. If models haven't loaded yet, the explainer
+  // omits the per-param breakdown.
+  const projectCaps: TTSCapabilities | null = useMemo(() => {
+    if (models.length === 0) return null
+    return capsForProject(project, models)
+  }, [project, models])
+
   // Load voice library + models and seed selection: project's current
   // voice + up to 3 most recent (by created date desc). User can re-tick.
   useEffect(() => {
@@ -1355,11 +1394,27 @@ function VoiceTab({
             whichever fits the book best.
           </p>
           <p className="text-xs text-muted-foreground">
-            Render uses the project's current params (num_step{' '}
-            {project.params.num_step}, gs {project.params.guidance_scale.toFixed(1)},
-            speed {project.params.speed.toFixed(2)}). Swapping voice
-            invalidates rendered chunks via the manifest signature — a
-            swap mid-project just re-renders on next run.
+            {projectCaps && projectCaps.params.length > 0 ? (
+              <>
+                Render uses the project's current params (
+                {projectCaps.params.map((spec, i) => {
+                  const value =
+                    (project.params as unknown as Record<string, number>)[spec.name]
+                  return (
+                    <span key={spec.name}>
+                      {i > 0 ? ', ' : ''}
+                      {spec.label}{' '}
+                      {value != null ? formatParam(spec, value) : '—'}
+                    </span>
+                  )
+                })}
+                ).{' '}
+              </>
+            ) : projectCaps ? (
+              <>Render uses {projectCaps.display_name}. </>
+            ) : null}
+            Swapping voice invalidates rendered chunks via the manifest
+            signature — a swap mid-project just re-renders on next run.
           </p>
 
           {voices === null ? (
