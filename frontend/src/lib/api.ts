@@ -421,6 +421,10 @@ export async function createProject(args: {
   book: File
   overwrite?: boolean
   language?: string
+  // v0.5 — pick the TTS engine up front so users with a Higgs voice
+  // don't have to discover the Advanced tab to switch off stock
+  // OmniVoice. Null / undefined / "default" → stock.
+  tts_model?: string | null
 }): Promise<Project> {
   const fd = new FormData()
   fd.append('name', args.name)
@@ -428,6 +432,7 @@ export async function createProject(args: {
   fd.append('book', args.book)
   fd.append('overwrite', args.overwrite ? 'true' : 'false')
   if (args.language) fd.append('language', args.language)
+  if (args.tts_model) fd.append('tts_model', args.tts_model)
   return fetch(`${BASE}/projects`, { method: 'POST', body: fd }).then(ok<Project>)
 }
 

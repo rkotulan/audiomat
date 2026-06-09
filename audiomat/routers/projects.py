@@ -125,18 +125,38 @@ async def create_project(
     book: UploadFile = File(...),
     overwrite: bool = Form(False),
     language: str | None = Form(None),
+    tts_model: str | None = Form(None),
 ):
     """Create a new project. Parses EPUB metadata to populate book info.
 
     ``language`` is honored for ``.txt`` uploads (which carry no
     metadata of their own); for ``.epub`` it's a fallback used only when
     the file's DC metadata is missing.
+
+    ``tts_model`` (v0.5) is the registered model slug the renderer will
+    dispatch to. ``None`` / ``""`` / ``"default"`` → stock OmniVoice.
+    Unknown slug → 400. Validated up front (instead of failing at
+    render time) so the user gets feedback while still on the form.
     """
     if not name.strip():
         raise HTTPException(400, "name is required")
     voice = Voice.find_by_name(voice_ref)
     if voice is None:
         raise HTTPException(404, f"voice not found: {voice_ref}")
+
+    # Validate the engine slug against the registry. Reserved
+    # ``"default"`` and empty/None all mean "stock OmniVoice" and
+    # collapse to None on disk so the cache signature stays canonical.
+    from audiomat.model_registry import DEFAULT_MODEL_SLUG, TTSModel
+    tts_model_clean: str | None = None
+    if tts_model:
+        candidate = tts_model.strip()
+        if candidate and candidate != DEFAULT_MODEL_SLUG:
+            if TTSModel.find_by_slug(PATHS.models_root, candidate) is None:
+                raise HTTPException(
+                    400, f"unknown tts_model slug: {candidate!r}",
+                )
+            tts_model_clean = candidate
 
     # Stage book to a temp file first so we can probe metadata
     suffix = Path(book.filename or "book.epub").suffix.lower() or ".epub"
@@ -175,6 +195,7 @@ async def create_project(
             voice_slug=voice.name_slug,
             book_meta=book_meta,
             overwrite=overwrite,
+            tts_model=tts_model_clean,
         )
     except FileExistsError as e:
         raise HTTPException(409, str(e))

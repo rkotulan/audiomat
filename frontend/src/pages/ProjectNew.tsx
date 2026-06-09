@@ -5,9 +5,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { createProject, listVoices } from '@/lib/api'
+import { createProject, listModels, listVoices } from '@/lib/api'
 import { LANGUAGE_OPTIONS, isValidLanguageCode } from '@/lib/languages'
-import type { Voice } from '@/lib/types'
+import { DEFAULT_MODEL_SLUG } from '@/lib/caps'
+import type { TTSModel, Voice } from '@/lib/types'
 
 export function ProjectNew() {
   const nav = useNavigate()
@@ -17,8 +18,18 @@ export function ProjectNew() {
   const requestedVoiceSlug = searchParams.get('voice') || ''
 
   const [voices, setVoices] = useState<Voice[]>([])
+  const [models, setModels] = useState<TTSModel[]>([])
   const [name, setName] = useState('')
   const [voiceRef, setVoiceRef] = useState('')
+  // v0.5: explicit engine pick at create time. The dropdown auto-
+  // suggests whatever the picked voice was tested with (so the common
+  // case — clone a Higgs voice then create a project with it — needs
+  // no extra clicks). User can override.
+  const [ttsModel, setTtsModel] = useState<string>(DEFAULT_MODEL_SLUG)
+  // Track whether the user has manually changed the engine pick — once
+  // they do, voice swaps stop re-overriding their choice. Otherwise
+  // switching voices would silently flip the engine they just set.
+  const [engineUserPicked, setEngineUserPicked] = useState(false)
   const [book, setBook] = useState<File | null>(null)
   const [language, setLanguage] = useState('cs')
   const [customLanguage, setCustomLanguage] = useState('')
@@ -27,9 +38,10 @@ export function ProjectNew() {
   const [dragActive, setDragActive] = useState(false)
 
   useEffect(() => {
-    listVoices()
-      .then((vs) => {
+    Promise.all([listVoices(), listModels().catch(() => [])])
+      .then(([vs, ms]) => {
         setVoices(vs)
+        setModels(ms)
         if (voiceRef) return
         const fromQuery = vs.find((v) => v.name_slug === requestedVoiceSlug)
         if (fromQuery) {
@@ -41,6 +53,17 @@ export function ProjectNew() {
       .catch((e) => setErr(String(e)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Auto-suggest engine from the picked voice's "tested with" model.
+  // The voice library uses that field informationally in v0.5, but on
+  // a fresh project it's the best hint we have — clone a Higgs voice
+  // then pick it for a project = obviously the project should use
+  // Higgs too. User can still flip via the Engine dropdown.
+  useEffect(() => {
+    if (engineUserPicked) return
+    const v = voices.find((x) => x.name === voiceRef)
+    setTtsModel(v?.tts_model || DEFAULT_MODEL_SLUG)
+  }, [voiceRef, voices, engineUserPicked])
 
   const isTxt = book?.name.toLowerCase().endsWith('.txt') ?? false
   const effectiveLanguage =
@@ -80,6 +103,7 @@ export function ProjectNew() {
         // Backend ignores `language` for EPUB unless DC metadata is
         // missing, so it's safe to always send.
         language: isTxt ? effectiveLanguage : undefined,
+        tts_model: ttsModel === DEFAULT_MODEL_SLUG ? null : ttsModel,
       })
       nav(`/projects/${p.name_slug}`)
     } catch (e) {
@@ -147,6 +171,52 @@ export function ProjectNew() {
                 ))}
               </select>
             )}
+          </div>
+
+          {/* v0.5: TTS engine pick. Defaults to whatever the selected
+              voice was tested with (auto-suggest), or stock OmniVoice
+              when the voice has no model assigned. User can override
+              before submit. */}
+          <div className="space-y-2">
+            <Label htmlFor="ptts">TTS engine</Label>
+            <select
+              id="ptts"
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+              value={ttsModel}
+              onChange={(e) => {
+                setTtsModel(e.target.value)
+                setEngineUserPicked(true)
+              }}
+              disabled={models.length === 0}
+            >
+              {models.length === 0 && <option value={DEFAULT_MODEL_SLUG}>Loading…</option>}
+              {models.map((m) => {
+                const ncSuffix =
+                  m.license === 'non_commercial' ? ' · non-commercial' : ''
+                return (
+                  <option key={m.name_slug} value={m.name_slug}>
+                    {m.name} · {m.capabilities.short_label}{ncSuffix}
+                  </option>
+                )
+              })}
+            </select>
+            {(() => {
+              const sel = models.find((m) => m.name_slug === ttsModel)
+              if (!sel) return null
+              if (sel.license === 'non_commercial') {
+                return (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Non-commercial license: {sel.capabilities.license_name}.
+                    Renders made with this engine carry its obligations.
+                  </p>
+                )
+              }
+              return (
+                <p className="text-xs text-muted-foreground">
+                  You can switch engines later on the project's Advanced tab.
+                </p>
+              )
+            })()}
           </div>
 
           <div className="space-y-2">
