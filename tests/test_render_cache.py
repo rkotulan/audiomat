@@ -115,6 +115,9 @@ class _StubProject:
     params: _StubParams
     book: _StubBook
     chunks_dir: Path
+    # v0.5 addition. None / "default" / "" all mean stock OmniVoice;
+    # _params_signature folds them onto the same canonical engine slug.
+    tts_model: str | None = None
 
 
 @dataclass

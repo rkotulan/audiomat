@@ -27,7 +27,7 @@ from audiomat.state import (
     RENDER_QUEUES,
     RENDER_THREADS,
     book_blocks,
-    get_tts_for_voice,
+    get_tts_for_project,
     load_project_or_404,
 )
 from audiomat.voice import Voice
@@ -63,7 +63,10 @@ async def start_render(
     RENDER_CANCEL[slug] = cancel_event
     loop = asyncio.get_running_loop()
 
-    tts = get_tts_for_voice(voice)
+    # v0.5: engine choice belongs to the project, not the voice. Swapping
+    # voices keeps the same engine; swapping engines invalidates the cache
+    # via _params_signature.
+    tts = get_tts_for_project(proj)
     renderer = ProjectRenderer(proj, voice, tts, blocks)
     indices = req.indices
 

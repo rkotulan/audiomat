@@ -25,7 +25,7 @@ from audiomat.routers.projects import is_metadata_block as _is_metadata_block
 from audiomat.schemas import PreviewCustomRequest, PreviewVoicesRequest
 from audiomat.state import (
     PATHS,
-    get_tts_for_voice,
+    get_tts_for_project,
     load_project_or_404,
     wav_duration_s,
 )
@@ -196,7 +196,10 @@ def preview_matrix(slug: str):
             tuned_cells = {}
 
     def event_gen():
-        tts = get_tts_for_voice(voice)
+        # v0.5: engine choice is project-level, not voice-level. Matrix
+        # cells are still per-voice in name but render through whatever
+        # engine the project owns.
+        tts = get_tts_for_project(proj)
         tts.load()
         sr = tts.sample_rate
 
@@ -401,10 +404,10 @@ def preview_voices(slug: str, req: PreviewVoicesRequest):
                         "duration_s": wav_duration_s(wav_path),
                     }
                 else:
-                    # Backend-agnostic generate() — Higgs vs OmniVoice
-                    # picked per-voice via state.get_tts_for_voice's
-                    # registry lookup (Phase 2 dispatch).
-                    tts = get_tts_for_voice(voice)
+                    # Backend-agnostic generate() — engine comes from the
+                    # project (v0.5), not the voice. Each cell in this
+                    # multi-voice matrix uses the same engine.
+                    tts = get_tts_for_project(proj)
                     t0 = time.time()
                     result = tts.generate(clean, voice, p, language=language)
                     gen_s = time.time() - t0
@@ -543,7 +546,9 @@ def preview_custom(slug: str, req: PreviewCustomRequest):
                 "gen_seconds": float(gen_times.get(wav_path.name, 0.0)),
                 "duration_s": wav_duration_s(wav_path)}
 
-    tts = get_tts_for_voice(voice)
+    # v0.5: engine resolved from the project; the voice ref drives the
+    # speaker clone but not the engine choice.
+    tts = get_tts_for_project(proj)
 
     # High-level generate() so the call works for both backends. Higgs
     # ignores num_step/guidance_scale/speed; OmniVoice consumes them.

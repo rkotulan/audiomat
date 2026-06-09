@@ -174,34 +174,29 @@ def peek_all_tts() -> list[OmniVoiceTTS]:
     return list(_TTS_INSTANCES.values())
 
 
-def get_tts_for_voice(voice) -> "OmniVoiceTTS | HiggsTTS":  # type: ignore[no-untyped-def]
-    """Resolve a voice's ``tts_model`` field through the model registry
-    and return the matching TTS instance. Fall back to stock OmniVoice
-    if the slug is None / empty / "default" — or if the registered slug
-    has been deleted since the voice was created (graceful degradation:
-    user loses fine-tune-specific quality but renders still work).
+def _resolve_slug_to_tts(
+    slug: str | None,
+    *,
+    owner_kind: str,
+    owner_id: str,
+):  # -> OmniVoiceTTS | HiggsTTS
+    """Slug → TTS instance with shared fallback semantics.
 
-    v0.4: looks up the registered ``TTSModel`` to discover the backend
-    (omnivoice vs higgs), so a voice pointing at a Higgs registry entry
-    instantiates :class:`HiggsTTS` instead of :class:`OmniVoiceTTS`.
-    """
-    from audiomat.model_registry import (
-        DEFAULT_MODEL_SLUG,
-        TTSModel,
-    )
-    tts_model_slug = getattr(voice, "tts_model", None)
-    if not tts_model_slug or tts_model_slug == DEFAULT_MODEL_SLUG:
+    Shared core of :func:`get_tts_for_voice` (legacy, voice-bound) and
+    :func:`get_tts_for_project` (v0.5+, project-bound). ``owner_kind`` /
+    ``owner_id`` only feed the warning message when the slug points at a
+    deleted registry entry — they don't affect dispatch."""
+    from audiomat.model_registry import DEFAULT_MODEL_SLUG, TTSModel
+
+    if not slug or slug == DEFAULT_MODEL_SLUG:
         return get_tts(target=None)
 
-    model = TTSModel.find_by_slug(PATHS.models_root, tts_model_slug)
+    model = TTSModel.find_by_slug(PATHS.models_root, slug)
     if model is None:
-        # Registered model went missing — log + fall back to stock so
-        # the user isn't stuck staring at an error on a render they
-        # didn't expect to break.
         import logging
         logging.getLogger("audiomat.state").warning(
-            "voice %r references missing tts_model %r — falling back to stock",
-            getattr(voice, "name_slug", "?"), tts_model_slug,
+            "%s %r references missing tts_model %r — falling back to stock",
+            owner_kind, owner_id, slug,
         )
         return get_tts(target=None)
 
@@ -211,6 +206,45 @@ def get_tts_for_voice(voice) -> "OmniVoiceTTS | HiggsTTS":  # type: ignore[no-un
     # paths accept ``None`` and just follow the local dir.
     revision = model.hf_revision if model.source_type == "hf" else None
     return get_tts(target=target, revision=revision, backend=model.backend)
+
+
+def get_tts_for_voice(voice) -> "OmniVoiceTTS | HiggsTTS":  # type: ignore[no-untyped-def]
+    """Resolve a voice's ``tts_model`` field through the model registry
+    and return the matching TTS instance.
+
+    **v0.4 legacy path** — kept for the voice-validator / clone preview
+    flow where the engine choice genuinely belongs to the voice (the
+    user is testing how a candidate ref clip sounds on a specific
+    backend, with no project context yet). The render + project-preview
+    paths moved to :func:`get_tts_for_project` in v0.5.
+    """
+    return _resolve_slug_to_tts(
+        getattr(voice, "tts_model", None),
+        owner_kind="voice",
+        owner_id=getattr(voice, "name_slug", "?"),
+    )
+
+
+def get_tts_for_project(project) -> "OmniVoiceTTS | HiggsTTS":  # type: ignore[no-untyped-def]
+    """Resolve a **project's** ``tts_model`` field and return the matching
+    TTS instance.
+
+    v0.5: engine choice was promoted from voice → project (see
+    audiomat/migrations/v0_5_project_tts_model.py). The render endpoint
+    and the project-level preview endpoints (preview-matrix, preview-
+    voices, preview-custom) call this so a project can A/B engines
+    without cloning its voice or mutating the voice library.
+
+    Same fallback contract as :func:`get_tts_for_voice`: None / empty /
+    ``"default"`` slug → stock OmniVoice; missing-registry-entry → log
+    + stock fallback (so a render against a deleted fine-tune doesn't
+    blow up the worker thread).
+    """
+    return _resolve_slug_to_tts(
+        getattr(project, "tts_model", None),
+        owner_kind="project",
+        owner_id=getattr(project, "name_slug", "?"),
+    )
 
 
 def clear_tts(target: str | None = None) -> None:

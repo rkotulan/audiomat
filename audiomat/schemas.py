@@ -239,6 +239,17 @@ class ProjectVoiceRequest(BaseModel):
     voice_slug: str
 
 
+class ProjectTTSModelRequest(BaseModel):
+    """PATCH /api/projects/{slug}/tts-model body.
+
+    ``tts_model`` is the registered model slug (or ``None`` / ``""`` /
+    ``"default"`` to reset to stock OmniVoice). Engine swap invalidates
+    the chunk cache via the same per-chunk signature pathway as voice
+    swap (engine slug is folded into ``ProjectRenderer._params_signature``
+    in v0.5)."""
+    tts_model: str | None = None
+
+
 class PreviewCustomRequest(BaseModel):
     num_step: int = 48
     guidance_scale: float = 2.0

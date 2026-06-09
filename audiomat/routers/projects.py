@@ -25,6 +25,7 @@ from audiomat.schemas import (
     BlocksSkippedRequest,
     BookMetaRequest,
     ProjectOut,
+    ProjectTTSModelRequest,
     ProjectVoiceRequest,
 )
 from audiomat.slug import chapter_stem as compute_chapter_stem
@@ -319,6 +320,39 @@ def update_project_voice(
         raise HTTPException(404, f"voice not found: {req.voice_slug}")
     proj.voice_ref = voice.name
     proj.voice_ref_slug = voice.name_slug
+    _save_with_if_match(proj, if_match)
+    return ProjectOut.from_project(proj)
+
+
+@router.patch("/{slug}/tts-model", response_model=ProjectOut)
+def update_project_tts_model(
+    slug: str,
+    req: ProjectTTSModelRequest,
+    if_match: int | None = Header(default=None, alias="If-Match"),
+):
+    """Swap the project's TTS engine (v0.5+).
+
+    The body's ``tts_model`` is a registry slug — ``None`` / ``""`` /
+    ``"default"`` resets to stock OmniVoice. The slug is validated
+    against the registry; an unknown slug (other than the reserved
+    ``"default"``) returns 400 rather than silently falling back, so the
+    UI can show a useful error instead of "your engine choice was
+    discarded".
+
+    Cache impact: engine slug is folded into the per-chunk manifest
+    signature (see ``ProjectRenderer._params_signature``), so swapping
+    OmniVoice ↔ Higgs invalidates cached chunks on the next render —
+    same pattern as a voice swap.
+    """
+    from audiomat.model_registry import DEFAULT_MODEL_SLUG, TTSModel
+    proj = load_project_or_404(slug)
+    raw = (req.tts_model or "").strip() or None
+    if raw and raw != DEFAULT_MODEL_SLUG:
+        if TTSModel.find_by_slug(PATHS.models_root, raw) is None:
+            raise HTTPException(400, f"unknown tts_model slug: {raw!r}")
+    # Normalise "default" / empty → None so the cache signature and DB
+    # row agree on what "stock" looks like across writes.
+    proj.tts_model = None if (raw is None or raw == DEFAULT_MODEL_SLUG) else raw
     _save_with_if_match(proj, if_match)
     return ProjectOut.from_project(proj)
 
