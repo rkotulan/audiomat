@@ -1041,8 +1041,10 @@ function PreviewTab({
             sounds best, and the project's render params will switch to it.
           </p>
           <p className="text-xs text-muted-foreground">
-            First call: ~22 s (sequential OmniVoice inference for 4 cells).
-            Subsequent calls re-use the cache.
+            First call: ~22 s on OmniVoice (RTF ~0.25) or ~90 s on Higgs
+            (RTF ~0.8) — sequential inference across 4 cells against
+            the project's bound TTS backend. Subsequent calls re-use
+            the cache.
           </p>
           <div className="flex gap-2">
             <Button onClick={onGenerate} disabled={busy}>
