@@ -51,6 +51,7 @@ import numpy as np
 from audiomat.headers import prepare_for_tts
 from audiomat.num2text import normalize_lang
 from audiomat.tts import GenerationResult
+from audiomat.tts_capabilities import HIGGS_CAPABILITIES, TTSCapabilities
 
 if TYPE_CHECKING:
     from audiomat.project import RenderParams
@@ -83,6 +84,11 @@ class HiggsTTS:
         result = tts.generate("Ahoj.", voice, params, language="cs")
         sf.write("out.wav", result.audio, result.sample_rate)
     """
+
+    # v0.5: engine self-description for UI + render validation. Higgs
+    # declares zero params (no diffusion knobs) and zero preset variants
+    # so UI surfaces auto-skip the Fine-tune dialog and preview matrix.
+    capabilities: TTSCapabilities = HIGGS_CAPABILITIES
 
     def __init__(
         self,

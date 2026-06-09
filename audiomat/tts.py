@@ -33,6 +33,7 @@ import numpy as np
 from audiomat.headers import prepare_for_tts
 from audiomat.num2text import normalize_lang
 from audiomat.project import RenderParams
+from audiomat.tts_capabilities import OMNIVOICE_CAPABILITIES, TTSCapabilities
 from audiomat.voice import Voice
 
 
@@ -71,6 +72,11 @@ class OmniVoiceTTS:
         result = tts.generate("Ahoj.", voice, params, language="cs")
         sf.write("out.wav", result.audio, result.sample_rate)
     """
+
+    # v0.5: engine self-description for UI + render validation. Class-
+    # level constant so callers (Models page listing, render endpoints)
+    # can read it without instantiating the adapter.
+    capabilities: TTSCapabilities = OMNIVOICE_CAPABILITIES
 
     def __init__(
         self,
