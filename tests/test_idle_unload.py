@@ -51,18 +51,21 @@ class _StubLoadedTTS:
 
 def _run_loop_one_tick(*, idle_seconds: float, timeout_s: int,
                        render_alive: bool = False) -> _StubLoadedTTS:
-    """Drive idle_unload_loop through exactly one wakeup with patched
-    state, then cancel. Returns the stub so tests can assert on
-    unload_calls."""
+    """Drive idle_unload_loop through exactly one wakeup with a stub
+    instance injected into the real ``_TTS_INSTANCES`` registry, then
+    cancel. Returns the stub so tests can assert on ``unload_calls``.
+
+    Why inject into ``_TTS_INSTANCES`` rather than patching ``peek_tts``?
+    The v0.4 multi-model refactor rewrote ``idle_unload_loop`` to iterate
+    ``_TTS_INSTANCES`` directly — patching ``peek_tts`` no longer
+    intercepts anything. Matching the loop's actual code path is the
+    only way to keep this test honest.
+    """
     import audiomat.state as state
 
     stub = _StubLoadedTTS(idle_seconds=idle_seconds)
-    original_peek = state.peek_tts
-    original_clear = state.clear_tts
     original_threads = dict(state.RENDER_THREADS)
 
-    state.peek_tts = lambda: stub  # type: ignore
-    state.clear_tts = stub.unload  # type: ignore
     state.RENDER_THREADS.clear()
     if render_alive:
         # Spin up a real-but-trivial thread that stays alive long enough
@@ -74,6 +77,14 @@ def _run_loop_one_tick(*, idle_seconds: float, timeout_s: int,
         cleanup_evt = evt
     else:
         cleanup_evt = None
+
+    # Inject the stub into the registry the loop actually walks. The
+    # key is arbitrary — the loop iterates values, not keys.
+    stub_key = "__idle_unload_test_stub__"
+    with state._TTS_LOCK:
+        original_instances = dict(state._TTS_INSTANCES)
+        state._TTS_INSTANCES.clear()
+        state._TTS_INSTANCES[stub_key] = stub  # type: ignore[assignment]
 
     async def _drive():
         task = asyncio.create_task(
@@ -90,8 +101,9 @@ def _run_loop_one_tick(*, idle_seconds: float, timeout_s: int,
     try:
         asyncio.run(_drive())
     finally:
-        state.peek_tts = original_peek
-        state.clear_tts = original_clear
+        with state._TTS_LOCK:
+            state._TTS_INSTANCES.clear()
+            state._TTS_INSTANCES.update(original_instances)
         state.RENDER_THREADS.clear()
         state.RENDER_THREADS.update(original_threads)
         if cleanup_evt is not None:
