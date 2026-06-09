@@ -345,7 +345,13 @@ function VoiceCard({
                 className="text-xs flex items-center gap-1.5"
               >
                 <Cpu className="h-3 w-3" />
-                TTS model
+                Tested with
+                <span
+                  className="text-muted-foreground"
+                  title="The engine used when validating this voice in the clone preview. Projects pick their own engine on the Advanced tab — this setting only drives the voice picker preview, not the project render."
+                >
+                  (?)
+                </span>
                 {saving && (
                   <span className="ml-auto text-xs text-muted-foreground italic">
                     saving…
@@ -362,8 +368,7 @@ function VoiceCard({
                 <option value="">OmniVoice (stock)</option>
                 {models.map((m) => (
                   <option key={m.name_slug} value={m.name_slug}>
-                    {m.name}
-                    {m.backend === 'higgs' ? ' · Higgs' : ''}
+                    {m.name} · {m.capabilities.short_label}
                     {m.license === 'non_commercial' ? ' · non-commercial' : ''}
                     {' '}({m.source_type === 'hf' ? 'HF' : 'local'})
                   </option>

@@ -228,7 +228,10 @@ function ModelRow({
   onRedownload: () => void
 }) {
   const isHF = model.source_type === 'hf'
-  const isHiggs = model.backend === 'higgs'
+  // v0.5: badge uses the capability's `short_label` so any future
+  // engine that isn't the default OmniVoice gets a consistent chip
+  // without us hand-writing a new `isXyz` literal here.
+  const showEngineBadge = model.capabilities.short_label !== 'OmniVoice'
   const isNonCommercial = model.license === 'non_commercial'
   return (
     <div className="rounded-md border bg-card p-3 flex items-start justify-between gap-3">
@@ -246,9 +249,13 @@ function ModelRow({
               </>
             )}
           </Badge>
-          {isHiggs && (
-            <Badge variant="default" className="font-normal" title="Higgs Audio v3 backend">
-              Higgs
+          {showEngineBadge && (
+            <Badge
+              variant="default"
+              className="font-normal"
+              title={`${model.capabilities.display_name} backend`}
+            >
+              {model.capabilities.short_label}
             </Badge>
           )}
           {isNonCommercial ? (
