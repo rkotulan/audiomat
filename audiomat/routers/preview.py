@@ -23,6 +23,7 @@ from audiomat.project import Project
 from audiomat.pronunciations import apply_pronunciations, load_pronunciations
 from audiomat.routers.projects import is_metadata_block as _is_metadata_block
 from audiomat.schemas import PreviewCustomRequest, PreviewVoicesRequest
+from audiomat.tts_capabilities import OMNIVOICE_PRESETS
 from audiomat.state import (
     PATHS,
     get_tts_for_project,
@@ -35,11 +36,39 @@ from audiomat.voice import Voice
 router = APIRouter(prefix="/api/projects", tags=["preview"])
 
 
+def _preview_matrix_for_project(proj) -> list[dict]:
+    """Resolve the active engine's preset variants into the legacy
+    ``PREVIEW_MATRIX``-shaped list this router consumes.
+
+    Each cell is ``{"label", "num_step", "guidance_scale", "speed"}``.
+    The schema is OmniVoice's because that's the only engine in v0.5
+    that publishes a preset matrix — Higgs reports zero variants and
+    the matrix endpoint short-circuits to the "engine has no presets"
+    explainer upstream (frontend's ``hasPresetMatrix(caps)`` gate).
+
+    v0.4 hardcoded these 4 cells here; v0.5 reads them from
+    :data:`audiomat.tts_capabilities.OMNIVOICE_CAPABILITIES.preset_variants`
+    so adding a new preset (or a new engine that exposes its own) is
+    a one-line change to the capability descriptor, not a 4-cell
+    table edit across files.
+    """
+    from audiomat.model_registry import caps_for_model_slug
+    from audiomat.state import PATHS as _PATHS
+    caps = caps_for_model_slug(
+        _PATHS.models_root, getattr(proj, "tts_model", None),
+    )
+    cells: list[dict] = []
+    for variant in caps.preset_variants:
+        cells.append({"label": variant.label, **variant.params})
+    return cells
+
+
+# Kept for backward import compatibility — internal callers should use
+# ``_preview_matrix_for_project(proj)``. Derived at import time from
+# the OmniVoice capability descriptor; if a downstream test imports
+# this constant it sees the same shape as the live endpoint.
 PREVIEW_MATRIX = [
-    {"label": "Fast",     "num_step": 32, "guidance_scale": 2.0, "speed": 1.0},
-    {"label": "Balanced", "num_step": 48, "guidance_scale": 2.0, "speed": 1.0},
-    {"label": "Crisp",    "num_step": 48, "guidance_scale": 2.5, "speed": 1.0},
-    {"label": "Stable",   "num_step": 64, "guidance_scale": 2.0, "speed": 1.0},
+    {"label": v.label, **v.params} for v in OMNIVOICE_PRESETS
 ]
 
 
@@ -195,6 +224,12 @@ def preview_matrix(slug: str):
         except (OSError, ValueError):
             tuned_cells = {}
 
+    # v0.5: resolve the active engine's preset list per request rather
+    # than hardcoding. For OmniVoice this returns the same 4 cells as
+    # v0.4; a future engine that publishes its own preset set drops in
+    # without touching this endpoint.
+    matrix = _preview_matrix_for_project(proj)
+
     def event_gen():
         # v0.5: engine choice is project-level, not voice-level. Matrix
         # cells are still per-voice in name but render through whatever
@@ -206,7 +241,7 @@ def preview_matrix(slug: str):
         yield {
             "event": "started",
             "data": _json.dumps({
-                "total": len(PREVIEW_MATRIX),
+                "total": len(matrix),
                 "sample_text": clean,
                 "sample_chars": len(clean),
                 "sample_block_index": sample_block_index,
@@ -217,7 +252,7 @@ def preview_matrix(slug: str):
 
         results: list[dict] = []
         gen_times_dirty = False
-        for idx, v in enumerate(PREVIEW_MATRIX):
+        for idx, v in enumerate(matrix):
             try:
                 # Speed comes from the project, not the preset — matrix
                 # is a num_step/gs A/B at the user's chosen tempo. A

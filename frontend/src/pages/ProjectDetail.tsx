@@ -64,7 +64,7 @@ import {
   updateProjectVoice,
 } from '@/lib/api'
 import { LANGUAGE_OPTIONS, isValidLanguageCode } from '@/lib/languages'
-import { capsForProject, formatParam } from '@/lib/caps'
+import { capsForProject, formatParam, hasPresetMatrix } from '@/lib/caps'
 import type {
   Chapter,
   ChaptersResponse,
@@ -998,25 +998,21 @@ function PreviewTab({
   const [cellsDone, setCellsDone] = useState(0)
   const [cellsTotal, setCellsTotal] = useState(0)
 
-  // Look up the project's voice → bound TTS model → backend. The
-  // parameter matrix is OmniVoice-specific (Fast/Balanced/Crisp/Stable
-  // are num_step + gs presets that Higgs ignores), so we render a
-  // different surface when the bound backend is Higgs.
-  const [voices, setVoices] = useState<Voice[]>([])
+  // v0.5: capabilities-driven. The active engine's preset_variants
+  // determines whether the matrix UI even makes sense; engines with
+  // <2 presets (Higgs ships zero — autoregressive LM with no knobs)
+  // get the "skip" explainer instead of 4 identical-sounding cells.
+  // No more `backend === 'higgs'` branches.
   const [models, setModels] = useState<TTSModel[]>([])
   useEffect(() => {
-    Promise.all([listVoices().catch(() => []), listModels().catch(() => [])])
-      .then(([vs, ms]) => {
-        setVoices(vs)
-        setModels(ms)
-      })
+    listModels()
+      .then(setModels)
+      .catch(() => setModels([]))
   }, [])
-  const projectBackend = useMemo<'omnivoice' | 'higgs'>(() => {
-    const v = voices.find((x) => x.name_slug === project.voice_ref_slug)
-    if (!v?.tts_model) return 'omnivoice'   // stock OmniVoice
-    const m = models.find((x) => x.name_slug === v.tts_model)
-    return m?.backend ?? 'omnivoice'
-  }, [voices, models, project.voice_ref_slug])
+  const projectCaps: TTSCapabilities | null = useMemo(() => {
+    if (models.length === 0) return null
+    return capsForProject(project, models)
+  }, [project, models])
 
   const onGenerate = async () => {
     setBusy(true)
@@ -1079,32 +1075,34 @@ function PreviewTab({
     Math.abs(project.params.guidance_scale - v.guidance_scale) < 0.01 &&
     Math.abs(project.params.speed - v.speed) < 0.01
 
-  // Higgs has no num_step / guidance_scale / speed knobs — the matrix
-  // would render 4 cells that all sound the same modulo stochastic
-  // sampling. Replace the picker with an explainer + jump-to-render
-  // button. The project's stored RenderParams are kept (in case the
-  // user later swaps back to an OmniVoice voice they don't lose the
-  // tuned values), they just don't drive Higgs render time.
-  if (projectBackend === 'higgs') {
+  // v0.5: engines with no preset matrix (Higgs is the canonical case —
+  // autoregressive LM with no diffusion knobs) get the "skip" explainer
+  // instead of N cells that all sound the same modulo stochastic
+  // sampling. `hasPresetMatrix` returns false for any engine missing
+  // either ≥2 variants or ≥1 tunable param — purely capability-driven.
+  // The project's stored RenderParams are kept (in case the user later
+  // swaps back to OmniVoice they don't lose the tuned values), they
+  // just don't drive Higgs render time.
+  if (projectCaps && !hasPresetMatrix(projectCaps)) {
     return (
       <div className="space-y-4">
         <Card>
           <CardHeader>
-            <CardTitle>Parameter matrix (skipped — voice uses Higgs)</CardTitle>
+            <CardTitle>
+              Parameter matrix (skipped — engine has no tunable params)
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
             <p>
-              The parameter matrix A/Bs OmniVoice's diffusion knobs
-              (<code>num_step</code>, <code>guidance_scale</code>,{' '}
-              <code>speed</code>). Higgs Audio v3 doesn't have those —
-              it's an autoregressive LM that ignores them. Rendering 4
-              cells would just burn ~90 s for samples that all sound the
-              same modulo stochastic sampling.
+              The parameter matrix A/Bs an engine's render knobs. The
+              current engine ({projectCaps.display_name}) doesn't expose
+              any — rendering N cells would just burn time on samples
+              that all sound the same modulo stochastic sampling.
             </p>
             <p>
-              To hear what this Higgs voice sounds like on the book's
-              sample text, use the <strong>Voice</strong> tab — its
-              picker matrix renders one cell per voice with the project's
+              To hear what this voice sounds like on the book's sample
+              text, use the <strong>Voice</strong> tab — its picker
+              matrix renders one cell per voice with the project's
               actual sample. To start the full book render, jump to{' '}
               <strong>Render</strong>.
             </p>
@@ -1239,6 +1237,7 @@ function PreviewTab({
       <FineTuneDialog
         open={tuningIndex !== null}
         variant={tuningIndex !== null && matrix ? matrix.variants[tuningIndex] : null}
+        caps={projectCaps}
         slug={slug}
         onClose={() => setTuningIndex(null)}
         onTuned={(custom) => {
@@ -1614,6 +1613,7 @@ function VoiceTab({
 function FineTuneDialog({
   open,
   variant,
+  caps,
   slug,
   onClose,
   onTuned,
@@ -1622,42 +1622,65 @@ function FineTuneDialog({
   variant:
     | (PreviewMatrix['variants'][number])
     | null
+  // v0.5: engine's declared param specs drive the slider rows
+  // (label / hint / range / default / formatting). Dialog never opens
+  // for engines with empty caps.params — `hasPresetMatrix` gates the
+  // matrix UI upstream.
+  caps: TTSCapabilities | null
   slug: string
   onClose: () => void
   onTuned: (custom: CustomPreviewResult) => void
 }) {
-  const [params, setParams] = useState({
-    num_step: variant?.num_step ?? 48,
-    guidance_scale: variant?.guidance_scale ?? 2.0,
-    speed: variant?.speed ?? 1.0,
-  })
+  // params is a free-form dict keyed by spec name. Seeded from the
+  // variant's wire fields (still typed as the OmniVoice shape over the
+  // SSE channel in v0.5) or, when the variant lacks a key, the spec
+  // default.
+  const seedParams = (): Record<string, number> => {
+    const out: Record<string, number> = {}
+    if (!caps) return out
+    const variantAny = (variant as unknown as Record<string, number>) ?? {}
+    for (const spec of caps.params) {
+      out[spec.name] =
+        variantAny[spec.name] != null ? variantAny[spec.name] : spec.default
+    }
+    return out
+  }
+  const [params, setParams] = useState<Record<string, number>>(seedParams())
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
-  // Re-init local sliders whenever the dialog opens for a different variant.
+  // Re-init local sliders whenever the dialog opens for a different
+  // variant or the active caps change (engine swap on the parent).
   useEffect(() => {
-    if (variant) {
-      setParams({
-        num_step: variant.num_step,
-        guidance_scale: variant.guidance_scale,
-        speed: variant.speed,
-      })
-      setErr('')
-    }
-  }, [variant])
+    setParams(seedParams())
+    setErr('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variant, caps])
 
   const onGenerate = async () => {
     setBusy(true)
     setErr('')
     try {
-      const result = await previewCustom(slug, {
-        ...params,
-        // Tag with the matrix cell label so the backend persists this
-        // tuning into previews/_tuned_cells.json — the matrix will
-        // restore it on the next render instead of falling back to the
-        // preset.
-        label: variant?.label,
-      })
+      // previewCustom's v0.4 body shape is still typed as
+      // {num_step, guidance_scale, speed} — for OmniVoice (the only
+      // engine with a matrix today) those keys are present in `params`
+      // because we seeded from the spec list. Cast through unknown to
+      // ship the dict as-is; downstream Pydantic ignores unknown keys.
+      const result = await previewCustom(
+        slug,
+        {
+          ...(params as unknown as {
+            num_step: number
+            guidance_scale: number
+            speed: number
+          }),
+          // Tag with the matrix cell label so the backend persists this
+          // tuning into previews/_tuned_cells.json — the matrix will
+          // restore it on the next render instead of falling back to
+          // the preset.
+          label: variant?.label,
+        },
+      )
       onTuned(result)
     } catch (e) {
       setErr(String(e))
@@ -1678,36 +1701,21 @@ function FineTuneDialog({
         </DialogHeader>
 
         <div className="space-y-5 py-2">
-          <SliderRow
-            label="num_step"
-            hint="Diffusion steps. Higher = smoother, ~1.5× slower per +16."
-            value={params.num_step}
-            min={16}
-            max={64}
-            step={16}
-            format={(v) => String(v)}
-            onChange={(v) => setParams({ ...params, num_step: v })}
-          />
-          <SliderRow
-            label="guidance_scale"
-            hint="Conditioning strength. 2.0 default; 3.0+ may over-emphasize."
-            value={params.guidance_scale}
-            min={1.0}
-            max={4.0}
-            step={0.1}
-            format={(v) => v.toFixed(1)}
-            onChange={(v) => setParams({ ...params, guidance_scale: v })}
-          />
-          <SliderRow
-            label="speed"
-            hint="Speech tempo. 1.0 natural, 0.85 relaxed, 1.15 brisk."
-            value={params.speed}
-            min={0.7}
-            max={1.3}
-            step={0.05}
-            format={(v) => v.toFixed(2) + '×'}
-            onChange={(v) => setParams({ ...params, speed: v })}
-          />
+          {caps?.params.map((spec) => (
+            <SliderRow
+              key={spec.name}
+              label={spec.label}
+              hint={spec.hint}
+              value={params[spec.name] ?? spec.default}
+              min={spec.min}
+              max={spec.max}
+              step={spec.step}
+              format={(v) => formatParam(spec, v)}
+              onChange={(v) =>
+                setParams((prev) => ({ ...prev, [spec.name]: v }))
+              }
+            />
+          ))}
         </div>
 
         <InlineModelProgress visible={busy} />
