@@ -967,6 +967,26 @@ function PreviewTab({
   const [cellsDone, setCellsDone] = useState(0)
   const [cellsTotal, setCellsTotal] = useState(0)
 
+  // Look up the project's voice → bound TTS model → backend. The
+  // parameter matrix is OmniVoice-specific (Fast/Balanced/Crisp/Stable
+  // are num_step + gs presets that Higgs ignores), so we render a
+  // different surface when the bound backend is Higgs.
+  const [voices, setVoices] = useState<Voice[]>([])
+  const [models, setModels] = useState<TTSModel[]>([])
+  useEffect(() => {
+    Promise.all([listVoices().catch(() => []), listModels().catch(() => [])])
+      .then(([vs, ms]) => {
+        setVoices(vs)
+        setModels(ms)
+      })
+  }, [])
+  const projectBackend = useMemo<'omnivoice' | 'higgs'>(() => {
+    const v = voices.find((x) => x.name_slug === project.voice_ref_slug)
+    if (!v?.tts_model) return 'omnivoice'   // stock OmniVoice
+    const m = models.find((x) => x.name_slug === v.tts_model)
+    return m?.backend ?? 'omnivoice'
+  }, [voices, models, project.voice_ref_slug])
+
   const onGenerate = async () => {
     setBusy(true)
     setErr('')
@@ -1027,6 +1047,47 @@ function PreviewTab({
     project.params.num_step === v.num_step &&
     Math.abs(project.params.guidance_scale - v.guidance_scale) < 0.01 &&
     Math.abs(project.params.speed - v.speed) < 0.01
+
+  // Higgs has no num_step / guidance_scale / speed knobs — the matrix
+  // would render 4 cells that all sound the same modulo stochastic
+  // sampling. Replace the picker with an explainer + jump-to-render
+  // button. The project's stored RenderParams are kept (in case the
+  // user later swaps back to an OmniVoice voice they don't lose the
+  // tuned values), they just don't drive Higgs render time.
+  if (projectBackend === 'higgs') {
+    return (
+      <div className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Parameter matrix (skipped — voice uses Higgs)</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            <p>
+              The parameter matrix A/Bs OmniVoice's diffusion knobs
+              (<code>num_step</code>, <code>guidance_scale</code>,{' '}
+              <code>speed</code>). Higgs Audio v3 doesn't have those —
+              it's an autoregressive LM that ignores them. Rendering 4
+              cells would just burn ~90 s for samples that all sound the
+              same modulo stochastic sampling.
+            </p>
+            <p>
+              To hear what this Higgs voice sounds like on the book's
+              sample text, use the <strong>Voice</strong> tab — its
+              picker matrix renders one cell per voice with the project's
+              actual sample. To start the full book render, jump to{' '}
+              <strong>Render</strong>.
+            </p>
+            <div className="flex gap-2">
+              <Button onClick={onPicked}>
+                <ArrowRight className="h-4 w-4" />
+                Skip to Render
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">

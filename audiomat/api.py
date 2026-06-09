@@ -83,7 +83,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="audiomat",
-    version="0.4.4",
+    version="0.4.5",
     description="Convert eBooks into audiobooks with cloned voices.",
     lifespan=lifespan,
 )
