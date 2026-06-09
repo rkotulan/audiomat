@@ -61,6 +61,7 @@ import {
   updateBlocksSkipped,
   updateProjectBook,
   updateProjectParams,
+  updateProjectTtsModel,
   updateProjectVoice,
 } from '@/lib/api'
 import { LANGUAGE_OPTIONS, isValidLanguageCode } from '@/lib/languages'
@@ -805,6 +806,13 @@ export function ProjectDetail() {
         </TabsContent>
 
         <TabsContent value="advanced" className="space-y-4 pt-4">
+          <TTSEngineCard
+            project={project}
+            models={models}
+            slug={slug}
+            onSaved={refresh}
+            onVersionConflict={() => setVersionConflict(true)}
+          />
           <OutputParamsCard
             project={project}
             slug={slug}
@@ -1739,6 +1747,172 @@ function FineTuneDialog({
 // OutputParamsCard — chunking + loudness knobs for the actual book render
 // (NOT for preview audio). Lives in the Advanced tab.
 // ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+// TTSEngineCard — v0.5. Project-level engine picker. The matrix-cell
+// labels, sliders, license badges, etc. throughout the rest of the UI
+// react to whichever engine this card sets. Engine swap invalidates
+// rendered chunks via the manifest signature (see render._params_signature).
+// ----------------------------------------------------------------------------
+
+const DEFAULT_SLUG = 'default'
+
+function TTSEngineCard({
+  project,
+  models,
+  slug,
+  onSaved,
+  onVersionConflict,
+}: {
+  project: Project
+  models: TTSModel[]
+  slug: string
+  onSaved: () => void
+  onVersionConflict: () => void
+}) {
+  // Project stores null for "stock OmniVoice"; the <select> value is
+  // the wire-level `"default"` token (`DEFAULT_MODEL_SLUG`) so it can
+  // round-trip cleanly through the dropdown.
+  const current = project.tts_model || DEFAULT_SLUG
+  const [selected, setSelected] = useState<string>(current)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  // Keep selected in sync if the project gets refetched (e.g. after a
+  // voice swap PATCH refreshes the project payload).
+  useEffect(() => {
+    setSelected(project.tts_model || DEFAULT_SLUG)
+  }, [project.tts_model])
+
+  const dirty = selected !== current
+  const selectedModel = models.find((m) => m.name_slug === selected) ?? null
+  const selectedCaps = selectedModel?.capabilities ?? null
+
+  const onSave = async () => {
+    setSaving(true)
+    setMsg('')
+    try {
+      // Send null over the wire for stock; backend also accepts
+      // "default" but null avoids it bouncing back as a non-null
+      // string in the response.
+      const payload = selected === DEFAULT_SLUG ? null : selected
+      await updateProjectTtsModel(slug, payload, project.version)
+      setMsg(
+        'Saved. Cached chunks rendered by the previous engine will be '
+        + 're-synthesized on the next render.',
+      )
+      onSaved()
+    } catch (e) {
+      if (e instanceof ProjectVersionConflict) {
+        onVersionConflict()
+      } else {
+        setMsg(`Failed: ${e}`)
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const onReset = () => {
+    setSelected(current)
+    setMsg('')
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>TTS engine</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 text-sm">
+        <p className="text-muted-foreground">
+          Which TTS engine renders this project. Swapping engines
+          invalidates the chunk cache via the manifest signature — a
+          swap mid-project re-renders the affected chapters on next run.
+        </p>
+
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+            Engine
+          </Label>
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+          >
+            {models.length === 0 && (
+              <option value={DEFAULT_SLUG}>Loading…</option>
+            )}
+            {models.map((m) => {
+              const ncSuffix =
+                m.license === 'non_commercial' ? ' · non-commercial' : ''
+              return (
+                <option key={m.name_slug} value={m.name_slug}>
+                  {m.name} · {m.capabilities.short_label}{ncSuffix}
+                </option>
+              )
+            })}
+          </select>
+        </div>
+
+        {/* License hint — surfaces the same amber NC warning the
+            voice picker already uses, but driven straight from caps
+            instead of branching on backend === 'higgs'. */}
+        {selectedModel?.license === 'non_commercial' && selectedCaps && (
+          <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+            Non-commercial license: {selectedCaps.license_name}. audiomat
+            itself stays MIT, but renders produced with this engine carry
+            its license obligations — review before commercial use.
+          </p>
+        )}
+
+        {/* Capability hint — feature flags, typical RTF / VRAM so the
+            user has something concrete before swapping. */}
+        {selectedCaps && (
+          <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+            <span>
+              params{' '}
+              <span className="font-mono text-foreground">
+                {selectedCaps.params.length}
+              </span>
+            </span>
+            <span>
+              presets{' '}
+              <span className="font-mono text-foreground">
+                {selectedCaps.preset_variants.length}
+              </span>
+            </span>
+            <span>
+              typical RTF{' '}
+              <span className="font-mono text-foreground">
+                {selectedCaps.typical_rtf.toFixed(2)}
+              </span>
+            </span>
+            <span>
+              VRAM{' '}
+              <span className="font-mono text-foreground">
+                ~{selectedCaps.typical_vram_gb.toFixed(1)} GB
+              </span>
+            </span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          <span className="text-xs text-muted-foreground">{msg}</span>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onReset} disabled={!dirty || saving}>
+              Reset
+            </Button>
+            <Button onClick={onSave} disabled={!dirty || saving}>
+              <Save className="h-4 w-4" />
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 
 function OutputParamsCard({
   project,
